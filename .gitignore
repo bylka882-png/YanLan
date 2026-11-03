@@ -1,0 +1,7 @@
+/target
+**/*.rs.bk
+run_err.txt
+run_out.txt
+*.png
+!docs/**/*.png
+cargo.exe
