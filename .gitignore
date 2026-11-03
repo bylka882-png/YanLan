@@ -5,3 +5,4 @@ run_out.txt
 *.png
 !docs/**/*.png
 cargo.exe
+build_release.bat
