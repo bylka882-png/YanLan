@@ -2,7 +2,7 @@
 
 Неофициальный лаунчер **Yandere Simulator** для Windows. Помогает держать несколько независимых сборок игры, ставить в них моды и откатывать изменения.
 
-![version](https://img.shields.io/badge/version-1.3.0-ff4d8d) ![license](https://img.shields.io/badge/license-CC%20BY--NC%204.0-lightgrey)
+![version](https://img.shields.io/badge/version-1.9.5-ff4d8d) ![license](https://img.shields.io/badge/license-CC%20BY--NC%204.0-lightgrey)
 
 <img width="160" height="160" alt="11043" src="https://github.com/user-attachments/assets/38c170aa-3f19-4977-b12f-d9ecbc6238f6" />
 
