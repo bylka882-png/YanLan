@@ -1,4 +1,5 @@
 # YanLan
+<img width="1224" height="640" alt="1104" src="https://github.com/user-attachments/assets/c11640a2-790e-4fef-ba29-78507e4bb560" />
 
 Неофициальный лаунчер **Yandere Simulator** для Windows. Помогает держать несколько независимых сборок игры, ставить в них моды и откатывать изменения.
 
