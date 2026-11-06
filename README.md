@@ -3,6 +3,12 @@
 Неофициальный лаунчер Yandere Simulator для Windows: отдельные сборки игры, установка модов и редактирование их конфигов.
 
 ![version](https://img.shields.io/badge/version-1.9.5-ff4d8d) ![license](https://img.shields.io/badge/license-CC%20BY--NC%204.0-lightgrey)
+<<<<<<< HEAD
+=======
+
+<img width="160" height="160" alt="11043" src="https://github.com/user-attachments/assets/38c170aa-3f19-4977-b12f-d9ecbc6238f6" />
+
+>>>>>>> 6ed2851adb42afd5a26446b894a3d0ab47f94e1f
 
 ## Возможности
 
