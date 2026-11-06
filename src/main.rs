@@ -8,12 +8,16 @@
 
 mod app;
 mod builds;
+mod cfg_edit;
 mod config;
 mod i18n;
 mod installer;
 mod jobs;
 mod library;
+mod loading;
+mod mods;
 mod net;
+mod player;
 mod progress;
 mod runner;
 mod theme;

@@ -91,6 +91,7 @@ pub fn now_ts() -> i64 {
 }
 
 /// Разложение unix-времени в гражданскую дату (алгоритм Ховарда Хиннанта).
+/// Время трактуется как UTC — для локального используйте [`local_civil`].
 pub fn civil_from_ts(ts: i64) -> (i32, u32, u32, u32, u32) {
     let days = ts.div_euclid(86_400);
     let secs_of_day = ts.rem_euclid(86_400) as u32;
@@ -107,11 +108,78 @@ pub fn civil_from_ts(ts: i64) -> (i32, u32, u32, u32, u32) {
     (year, m, d, secs_of_day / 3600, (secs_of_day % 3600) / 60)
 }
 
+#[repr(C)]
+#[derive(Default)]
+struct LocalTm {
+    sec: i32,
+    min: i32,
+    hour: i32,
+    mday: i32,
+    mon: i32,
+    year: i32,
+    wday: i32,
+    yday: i32,
+    isdst: i32,
+}
+
+/// Раскладывает unix-время в поля локального времени компьютера.
+///
+/// `civil_from_ts` работает в UTC, поэтому показывать его напрямую нельзя:
+/// в UTC+3 время отставало бы на три часа, а в отрицательных поясах — убегало
+/// вперёд. Здесь используем системный `localtime`, чтобы дата и часы совпадали
+/// с часами Windows при любом часовом поясе и переходе на летнее время.
+pub fn local_civil(ts: i64) -> (i32, u32, u32, u32, u32) {
+    if ts <= 0 {
+        return (1970, 1, 1, 0, 0);
+    }
+
+    #[cfg(windows)]
+    {
+        // UCRT: errno_t _localtime64_s(struct tm *tmDest, const __time64_t *sourceTime).
+        extern "C" {
+            fn _localtime64_s(out: *mut LocalTm, time: *const i64) -> i32;
+        }
+        let mut tm = LocalTm::default();
+        // SAFETY: `tm` — валидная выделенная структура, `ts` — корректный
+        // указатель на время жизни вызова. Функция только заполняет `tm`.
+        if unsafe { _localtime64_s(&mut tm, &ts) } == 0 {
+            return (
+                tm.year + 1900,
+                (tm.mon + 1).clamp(1, 12) as u32,
+                tm.mday.clamp(1, 31) as u32,
+                tm.hour.clamp(0, 23) as u32,
+                tm.min.clamp(0, 59) as u32,
+            );
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        // POSIX: struct tm *localtime_r(const time_t *timep, struct tm *result).
+        extern "C" {
+            fn localtime_r(time: *const i64, out: *mut LocalTm) -> *mut LocalTm;
+        }
+        let mut tm = LocalTm::default();
+        // SAFETY: см. ветку Windows — структура и указатель валидны.
+        if !unsafe { localtime_r(&ts, &mut tm) }.is_null() {
+            return (
+                tm.year + 1900,
+                (tm.mon + 1).clamp(1, 12) as u32,
+                tm.mday.clamp(1, 31) as u32,
+                tm.hour.clamp(0, 23) as u32,
+                tm.min.clamp(0, 59) as u32,
+            );
+        }
+    }
+
+    civil_from_ts(ts)
+}
+
 pub fn format_ts(ts: i64) -> String {
     if ts <= 0 {
         return String::new();
     }
-    let (y, m, d, hh, mm) = civil_from_ts(ts);
+    let (y, m, d, hh, mm) = local_civil(ts);
     if is_ru() {
         format!("{d:02}.{m:02}.{y} {hh:02}:{mm:02}")
     } else {

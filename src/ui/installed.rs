@@ -16,6 +16,8 @@ enum InstalledAction {
         name: String,
         game_id: String,
     },
+    /// Ключ установленного мода: открывает редактор его конфига.
+    ModSettings(String),
     InstallLocalFile,
     GoBuilds,
 }
@@ -85,6 +87,58 @@ impl App {
                 }
                 ui.add_space(10.0);
 
+                // Сборки с модами — от новой к старой, плюс «Все».
+                let mut filter_builds: Vec<&library::GameInstall> = games
+                    .iter()
+                    .filter(|g| mods.iter().any(|m| m.game_id == g.meta.id))
+                    .collect();
+                filter_builds.sort_by(|a, b| {
+                    let da = a.meta.date.clone().unwrap_or_default();
+                    let db = b.meta.date.clone().unwrap_or_default();
+                    db.cmp(&da)
+                        .then_with(|| b.meta.installed_at.cmp(&a.meta.installed_at))
+                        .then_with(|| {
+                            a.display_name()
+                                .to_lowercase()
+                                .cmp(&b.display_name().to_lowercase())
+                        })
+                });
+                if let Some(id) = &self.installed_filter {
+                    if !filter_builds.iter().any(|g| &g.meta.id == id) {
+                        self.installed_filter = None;
+                    }
+                }
+                if !filter_builds.is_empty() {
+                    let filter = self.installed_filter.clone();
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing = Vec2::new(6.0, 6.0);
+                        let all = fill(
+                            &pick("Все · {count}", "All · {count}"),
+                            &[("count", &mods.len().to_string())],
+                        );
+                        if w::chip(ui, &p, &all, filter.is_none(), true, p.accent).clicked() {
+                            self.installed_filter = None;
+                        }
+                        for game in &filter_builds {
+                            let name = game.display_name();
+                            let count = mods.iter().filter(|m| m.game_id == game.meta.id).count();
+                            let text = format!("{} · {}", trim_to(&name, 30), count);
+                            let active = filter.as_deref() == Some(game.meta.id.as_str());
+                            if w::chip(ui, &p, &text, active, true, p.accent)
+                                .on_hover_text(&name)
+                                .clicked()
+                            {
+                                self.installed_filter = if active {
+                                    None
+                                } else {
+                                    Some(game.meta.id.clone())
+                                };
+                            }
+                        }
+                    });
+                    ui.add_space(6.0);
+                }
+
                 if games.is_empty() {
                     empty_card(
                         ui,
@@ -123,9 +177,11 @@ impl App {
                     // Активная сборка — первой в списке, чтобы её моды были
                     // видны без прокрутки.
                     let selected = self.selected_game.clone();
+                    let only = self.installed_filter.clone();
                     let mut sections: Vec<&library::GameInstall> = games
                         .iter()
                         .filter(|g| mods.iter().any(|m| m.game_id == g.meta.id))
+                        .filter(|g| only.as_deref().map_or(true, |id| id == g.meta.id))
                         .collect();
                     sections.sort_by_key(|g| {
                         if selected.as_deref() == Some(g.meta.id.as_str()) {
@@ -235,6 +291,9 @@ impl App {
             InstalledAction::GoBuilds => {
                 self.tab = Tab::Builds;
             }
+            InstalledAction::ModSettings(key) => {
+                self.open_mod_settings(&key);
+            }
             InstalledAction::InstallLocalFile => {
                 let Some(game) = self.current_game().cloned() else {
                     self.toast(
@@ -314,11 +373,16 @@ fn mod_row(ui: &mut egui::Ui, p: &Palette, item: &InstalledMod) -> Option<Instal
         egui::pos2(rect.right() - 14.0 - btn_w / 2.0, rect.center().y),
         Vec2::new(btn_w, btn_h),
     );
-    // Текст занимает всё слева от кнопки, поэтому длинные строки обрезаются,
-    // не заезжая под неё.
+    // Шестерёнка стоит левее «Удалить»; пока это заготовка настроек мода.
+    let gear_rect = egui::Rect::from_center_size(
+        egui::pos2(btn_rect.left() - 8.0 - 17.0, rect.center().y),
+        Vec2::new(34.0, 32.0),
+    );
+    // Текст занимает всё слева от кнопок, поэтому длинные строки обрезаются,
+    // не заезжая под них.
     let text_rect = egui::Rect::from_min_max(
         rect.min + Vec2::new(14.0, 5.0),
-        egui::pos2(btn_rect.left() - 12.0, rect.max.y - 5.0),
+        egui::pos2(gear_rect.left() - 10.0, rect.max.y - 5.0),
     );
     ui.scope_builder(
         egui::UiBuilder::new()
@@ -356,6 +420,22 @@ fn mod_row(ui: &mut egui::Ui, p: &Palette, item: &InstalledMod) -> Option<Instal
                 meta.push_str(&format!("  ·  {}", format_ts(item.installed_at)));
             }
             ui.add(egui::Label::new(RichText::new(meta).size(10.5).color(p.muted)).truncate());
+        },
+    );
+
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .max_rect(gear_rect)
+            .layout(egui::Layout::centered_and_justified(
+                egui::Direction::LeftToRight,
+            )),
+        |ui| {
+            if w::gear(ui, p, true)
+                .on_hover_text(pick("Настройки мода", "Mod settings"))
+                .clicked()
+            {
+                action = Some(InstalledAction::ModSettings(item.key.clone()));
+            }
         },
     );
 

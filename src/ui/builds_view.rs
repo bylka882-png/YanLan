@@ -59,6 +59,9 @@ impl App {
                         create = true;
                     }
                     ui.add_space(10.0);
+                    // ComboBox берёт высоту из interact_size, поэтому задаём её
+                    // равной высоте кнопки — тогда центры совпадают пиксель в пиксель.
+                    ui.spacing_mut().interact_size.y = 34.0;
                     egui::ComboBox::from_id_salt("builds_sort")
                         .width(132.0)
                         .selected_text(RichText::new(self.cfg.builds_sort.label()).size(12.5))
@@ -289,20 +292,10 @@ fn build_card(
     // Фон рисуем сами: клик по любому месту карточки выбирает сборку, а кнопки
     // внутри добавляются позже и поэтому получают клики первыми.
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 118.0), Sense::click());
-    let bg = if selected {
-        p.card
-    } else if response.hovered() {
-        p.card_hover
-    } else {
-        p.card
-    };
-    let border = if selected {
-        p.accent
-    } else if response.hovered() {
-        p.accent_dim
-    } else {
-        p.border
-    };
+    // Подсвечивается только выбранная сборка. Наведение на карточку ничего не
+    // меняет: клик по ней и так выбирает сборку, а лишняя подсветка мешала.
+    let bg = p.card;
+    let border = if selected { p.accent } else { p.border };
     ui.painter()
         .rect(rect, 14.0, bg, Stroke::new(1.0_f32, border));
     if response.hovered() {

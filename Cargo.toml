@@ -1,6 +1,6 @@
 [package]
 name = "yanlan"
-version = "1.5.0"
+version = "1.9.5"
 edition = "2021"
 description = "Неофициальный лаунчер Yandere Simulator: отдельные сборки, моды и архив версий"
 authors = ["Archangel192028"]
@@ -32,7 +32,16 @@ zesven = { version = "3.2", default-features = false, features = [
     "ppmd",
 ] }
 regex = "1"
-image = { version = "0.25", default-features = false, features = ["png"] }
+# Манифесты каталога модов лежат в YAML.
+serde_yaml = "0.9"
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "jpeg",
+    "webp",
+    "gif",
+] }
+# Встроенный плеер YouTube: дочерний WebView2 внутри окна лаунчера.
+wry = "0.45"
 dirs = "5"
 percent-encoding = "2"
 rfd = { version = "0.15", default-features = false }

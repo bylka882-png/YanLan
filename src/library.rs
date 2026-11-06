@@ -451,6 +451,9 @@ pub struct InstalledMod {
     pub game_id: String,
     pub installed_at: i64,
     pub files: Vec<ModFile>,
+    /// Путь к конфигу мода относительно папки сборки (поле `cfg`).
+    #[serde(default)]
+    pub cfg: String,
 }
 
 impl InstalledMod {
@@ -472,6 +475,7 @@ impl InstalledMod {
             game_id: game_id.to_string(),
             installed_at: ts,
             files,
+            cfg: String::new(),
         }
     }
 }
@@ -524,19 +528,29 @@ impl Library {
 }
 
 pub fn kind_label(kind: &str) -> &'static str {
-    match kind {
+    match kind.trim().to_ascii_lowercase().as_str() {
         "mod" => pick("Мод", "Mod"),
         "patch" => pick("Патч", "Patch"),
-        "texture" => pick("Текстуры", "Textures"),
+        "texture" | "textures" | "tr" => pick("Текстуры", "Textures"),
+        "pm" | "posemod" | "pose" => pick("Pose-мод", "Pose mod"),
+        "ml" | "loader" => pick("Загрузчик", "Loader"),
+        "build" => pick("Сборка", "Build"),
+        "plugin" => pick("Плагин", "Plugin"),
+        "translate" | "translation" => pick("Перевод", "Translation"),
         _ => pick("Другое", "Other"),
     }
 }
 
 pub fn kind_color(kind: &str) -> egui::Color32 {
-    match kind {
+    match kind.trim().to_ascii_lowercase().as_str() {
         "patch" => egui::Color32::from_rgb(0xF5, 0xB5, 0x5C),
-        "texture" => egui::Color32::from_rgb(0x7D, 0xD3, 0xFC),
+        "texture" | "textures" | "tr" => egui::Color32::from_rgb(0xC7, 0x8A, 0xFC),
         "mod" => egui::Color32::from_rgb(0xFF, 0x7A, 0xA8),
+        "pm" | "posemod" | "pose" => egui::Color32::from_rgb(0x5A, 0xD6, 0x8E),
+        "ml" | "loader" => egui::Color32::from_rgb(0x62, 0xA8, 0xFF),
+        "build" => egui::Color32::from_rgb(0xFF, 0xB8, 0x4D),
+        "plugin" => egui::Color32::from_rgb(0xFF, 0x8A, 0x65),
+        "translate" | "translation" => egui::Color32::from_rgb(0x5A, 0xD6, 0xD6),
         _ => egui::Color32::from_rgb(0xB0, 0xA8, 0xB4),
     }
 }

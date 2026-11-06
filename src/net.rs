@@ -11,7 +11,7 @@ use serde::de::DeserializeOwned;
 use crate::i18n::{fill, pick};
 use crate::progress::Progress;
 
-pub const UA: &str = "YanLan/1.5 (Windows; Yandere Simulator launcher)";
+pub const UA: &str = "YanLan/1.6 (Windows; Yandere Simulator launcher)";
 
 static PROXY: OnceLock<RwLock<Option<String>>> = OnceLock::new();
 
@@ -74,6 +74,50 @@ pub fn get_json<T: DeserializeOwned>(url: &str) -> Result<T, String> {
             &[("err", &e.to_string())],
         )
     })
+}
+
+/// Скачивает текстовый файл (манифест, index.yaml).
+pub fn get_text(url: &str) -> Result<String, String> {
+    let response = agent().get(url).call().map_err(describe)?;
+    response.into_string().map_err(|e| {
+        fill(
+            &pick(
+                "Не удалось прочитать ответ: {err}",
+                "Failed to read the response: {err}",
+            ),
+            &[("err", &e.to_string())],
+        )
+    })
+}
+
+/// То же, но 404 считается нормальным отсутствием файла.
+pub fn get_text_opt(url: &str) -> Result<Option<String>, String> {
+    match agent().get(url).call() {
+        Ok(response) => response.into_string().map(Some).map_err(|e| {
+            fill(
+                &pick(
+                    "Не удалось прочитать ответ: {err}",
+                    "Failed to read the response: {err}",
+                ),
+                &[("err", &e.to_string())],
+            )
+        }),
+        Err(ureq::Error::Status(404, _)) => Ok(None),
+        Err(err) => Err(describe(err)),
+    }
+}
+
+/// Скачивает файл в память — для скриншотов каталога.
+pub fn get_bytes(url: &str) -> Result<Vec<u8>, String> {
+    let response = agent().get(url).call().map_err(describe)?;
+    let mut data = Vec::new();
+    response.into_reader().read_to_end(&mut data).map_err(|e| {
+        fill(
+            &pick("Ошибка сети: {err}", "Network error: {err}"),
+            &[("err", &e.to_string())],
+        )
+    })?;
+    Ok(data)
 }
 
 /// Скачивает файл, поддерживая докачку. Возвращает размер файла.

@@ -1,15 +1,17 @@
 //! Состояние приложения и общий каркас интерфейса.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use egui::{RichText, Vec2};
 
 use crate::builds::{self, Build};
-use crate::config::Config;
+use crate::config::{Config, ProxyKind};
 use crate::i18n::{fill, pick};
 use crate::jobs::{self, Ev};
 use crate::library::{GameInstall, Library};
+use crate::mods::{self, ModGroup, ModType, ModVariant};
 use crate::progress::Progress;
 use crate::runner;
 use crate::theme::{self, Palette};
@@ -41,8 +43,8 @@ impl Tab {
                 "Create separate builds — for mods, patches and experiments",
             ),
             Tab::Catalog => pick(
-                "Моды, патчи и текстуры — скоро",
-                "Mods, patches and textures — coming soon",
+                "Моды, патчи и текстуры сообщества — с превью и совместимостью",
+                "Community mods, patches and textures — with previews and compatibility",
             ),
             Tab::Installed => pick(
                 "Моды во всех сборках — по секции на сборку",
@@ -75,10 +77,47 @@ pub enum ConfirmAction {
     },
 }
 
+/// Установка из каталога, ожидающая подтверждения: зависимости и конфликты.
+#[derive(Clone)]
+pub struct CatalogPending {
+    pub variant: ModVariant,
+    /// Зависимости, которые будут скачаны и установлены первыми.
+    pub deps: Vec<ModVariant>,
+    /// Зависимости, которых нет в каталоге или у них нет ссылки на архив.
+    pub missing: Vec<String>,
+    /// Уже установленные моды, чьи файлы пересекаются с `affected_files`.
+    pub conflicts: Vec<String>,
+}
+
 pub struct Toast {
     pub text: String,
     pub ok: bool,
     pub at: Instant,
+}
+
+/// Готовая обложка каталога: кадры GIF (или один кадр) и их задержки.
+#[derive(Clone)]
+pub struct CoverAnim {
+    pub frames: Vec<egui::TextureHandle>,
+    pub delays: Vec<f32>,
+    pub total: f32,
+}
+
+impl CoverAnim {
+    /// Кадр на момент времени `time` и сколько секунд он ещё будет виден.
+    pub fn frame(&self, time: f64) -> (usize, f32) {
+        if self.frames.len() <= 1 || self.total <= 0.0 {
+            return (0, 0.0);
+        }
+        let mut left = (time % self.total as f64) as f32;
+        for (index, delay) in self.delays.iter().enumerate() {
+            if left < *delay {
+                return (index, *delay - left);
+            }
+            left -= *delay;
+        }
+        (self.frames.len() - 1, 0.0)
+    }
 }
 
 pub struct App {
@@ -92,6 +131,28 @@ pub struct App {
     pub builds_loading: bool,
     pub builds_error: Option<String>,
     pub builds_fetched_at: Option<i64>,
+
+    pub catalog: Vec<ModGroup>,
+    pub catalog_loaded: bool,
+    pub catalog_loading: bool,
+    pub catalog_error: Option<String>,
+    pub catalog_fetched_at: Option<i64>,
+    pub catalog_query: String,
+    /// `None` — раздел «Все».
+    pub catalog_section: Option<ModType>,
+    pub catalog_sort: mods::CatalogSort,
+    pub catalog_covers: HashMap<String, CoverAnim>,
+    pub catalog_cover_pending: HashSet<String>,
+    pub catalog_cover_failed: HashSet<String>,
+    /// Открытая карточка (id мода) и выбранный в ней вариант.
+    pub catalog_selected: Option<String>,
+    pub catalog_variant: usize,
+    pub catalog_shot: usize,
+    pub catalog_pending: Option<CatalogPending>,
+    /// Мод типа `Build`, для которого вводится название новой сборки.
+    pub catalog_build: Option<ModVariant>,
+    pub catalog_build_name: String,
+    pub catalog_build_focus: bool,
 
     pub tab: Tab,
     pub selected_game: Option<String>,
@@ -124,10 +185,21 @@ pub struct App {
     pub launch_opts_focus: bool,
     pub speed: (Instant, u64, f64),
     pub root_input: String,
-    /// Текст поля «свой прокси» в настройках.
+    /// Адрес прокси без схемы: «host:port» (логин и пароль — необязательно).
     pub proxy_input: String,
+    /// Тип прокси, выбранный в настройках.
+    pub proxy_kind: ProxyKind,
     /// Какая тема уже применена к системному заголовку окна.
     pub chrome_light: Option<bool>,
+    /// Анимированный индикатор загрузки из `assets/loading.gif`.
+    pub loading: Option<crate::loading::Anim>,
+    /// Фильтр «Установлено» по id сборки; `None` — показать все.
+    pub installed_filter: Option<String>,
+    /// Ролик, который открыт во встроенном плеере.
+    pub player_id: Option<String>,
+    pub player: Option<crate::player::Player>,
+    /// Открытый редактор конфига установленного мода.
+    pub mod_cfg: Option<crate::cfg_edit::Editor>,
 }
 
 impl App {
@@ -137,7 +209,7 @@ impl App {
         cfg.ensure_dirs();
         let p = theme::apply(&cc.egui_ctx, cfg.light_theme);
         let root_input = cfg.root_dir.display().to_string();
-        let proxy_input = cfg.proxy.clone();
+        let (proxy_kind, proxy_input) = ProxyKind::split(&cfg.proxy);
         crate::net::set_proxy(if cfg.proxy.trim().is_empty() {
             None
         } else {
@@ -155,6 +227,24 @@ impl App {
             builds_loading: false,
             builds_error: None,
             builds_fetched_at: None,
+            catalog: Vec::new(),
+            catalog_loaded: false,
+            catalog_loading: false,
+            catalog_error: None,
+            catalog_fetched_at: None,
+            catalog_query: String::new(),
+            catalog_section: None,
+            catalog_sort: mods::CatalogSort::default(),
+            catalog_covers: HashMap::new(),
+            catalog_cover_pending: HashSet::new(),
+            catalog_cover_failed: HashSet::new(),
+            catalog_selected: None,
+            catalog_variant: 0,
+            catalog_shot: 0,
+            catalog_pending: None,
+            catalog_build: None,
+            catalog_build_name: String::new(),
+            catalog_build_focus: false,
             tab: Tab::Builds,
             selected_game: None,
             progress: None,
@@ -178,7 +268,13 @@ impl App {
             speed: (Instant::now(), 0, 0.0),
             root_input,
             proxy_input,
+            proxy_kind,
             chrome_light: None,
+            loading: crate::loading::Anim::new(&cc.egui_ctx),
+            installed_filter: None,
+            player_id: None,
+            player: None,
+            mod_cfg: None,
         };
 
         app.reload_library();
@@ -187,6 +283,12 @@ impl App {
             app.set_builds(cache.builds);
             app.builds_fetched_at = Some(cache.fetched_at);
             app.builds_loaded = true;
+        }
+
+        if let Some(cache) = mods::load_cache(&app.cfg) {
+            app.catalog = cache.mods;
+            app.catalog_fetched_at = Some(cache.fetched_at);
+            app.catalog_loaded = true;
         }
 
         app.log(fill(
@@ -200,6 +302,14 @@ impl App {
             .unwrap_or(true);
         if stale_builds && app.cfg.auto_refresh {
             app.refresh_builds();
+        }
+
+        let stale_catalog = app
+            .catalog_fetched_at
+            .map(|ts| util::now_ts() - ts > mods::CACHE_TTL)
+            .unwrap_or(true);
+        if stale_catalog && app.cfg.auto_refresh {
+            app.refresh_catalog();
         }
 
         app
@@ -291,11 +401,34 @@ impl App {
         }
         self.builds_loading = true;
         self.builds_error = None;
+        // Старый список убираем сразу: во время обновления показывается
+        // индикатор загрузки, а не устаревшие версии.
+        self.builds.clear();
+        self.builds_loaded = false;
         let c = jobs::Ctx2 {
             ctx: self.ctx.clone(),
             tx: self.tx.clone(),
         };
         let _ = jobs::fetch_builds(c, self.cfg.clone());
+    }
+
+    /// Обновляет каталог модов YanMod в фоне.
+    pub fn refresh_catalog(&mut self) {
+        if self.catalog_loading {
+            return;
+        }
+        self.catalog_loading = true;
+        self.catalog_error = None;
+        self.catalog.clear();
+        self.catalog_loaded = false;
+        self.catalog_selected = None;
+        self.catalog_pending = None;
+        self.catalog_build = None;
+        let c = jobs::Ctx2 {
+            ctx: self.ctx.clone(),
+            tx: self.tx.clone(),
+        };
+        let _ = jobs::fetch_catalog(c, self.cfg.clone());
     }
 
     /// Открывает диалог создания сборки, подставляя последнюю версию.
@@ -430,18 +563,34 @@ impl App {
         self.toast(message, true);
     }
 
-    /// Применяет прокси из поля настроек ко всем сетевым запросам.
+    /// Применяет прокси из полей настроек ко всем сетевым запросам.
+    ///
+    /// Адрес можно вводить без схемы: `127.0.0.1:8080`. Если схема указана,
+    /// она важнее выбранного типа — так удобно вставлять готовую ссылку.
     pub fn apply_proxy(&mut self) {
         let text = self.proxy_input.trim().to_string();
         if text.is_empty() {
-            crate::net::set_proxy(None);
-            self.cfg.proxy.clear();
-            self.cfg.save();
-            self.log(pick("Прокси отключён", "Proxy disabled"));
-            self.toast(pick("Прокси отключён", "Proxy disabled"), true);
+            if self.cfg.proxy.trim().is_empty() {
+                self.toast(
+                    pick(
+                        "Сначала укажите адрес прокси",
+                        "Enter the proxy address first",
+                    ),
+                    false,
+                );
+            } else {
+                self.disable_proxy(true);
+            }
             return;
         }
-        if let Err(err) = ureq::Proxy::new(&text) {
+        let (parsed, address) = ProxyKind::split(&text);
+        let kind = if text.contains("://") {
+            parsed
+        } else {
+            self.proxy_kind
+        };
+        let url = format!("{}{}", kind.scheme(), address.trim());
+        if let Err(err) = ureq::Proxy::new(&url) {
             let message = fill(
                 &pick(
                     "Не удалось разобрать адрес прокси: {err}",
@@ -452,15 +601,28 @@ impl App {
             self.toast(message, false);
             return;
         }
-        crate::net::set_proxy(Some(text.clone()));
-        self.cfg.proxy = text.clone();
+        self.proxy_kind = kind;
+        self.proxy_input = address.trim().to_string();
+        crate::net::set_proxy(Some(url.clone()));
+        self.cfg.proxy = url.clone();
         self.cfg.save();
         let message = fill(
             &pick("Прокси включён: {proxy}", "Proxy enabled: {proxy}"),
-            &[("proxy", &text)],
+            &[("proxy", &url)],
         );
         self.log(message.clone());
         self.toast(message, true);
+    }
+
+    /// Отключает прокси; введённый адрес остаётся в поле для быстрого включения.
+    pub fn disable_proxy(&mut self, notify: bool) {
+        crate::net::set_proxy(None);
+        self.cfg.proxy.clear();
+        self.cfg.save();
+        if notify {
+            self.log(pick("Прокси отключён", "Proxy disabled"));
+            self.toast(pick("Прокси отключён", "Proxy disabled"), true);
+        }
     }
 
     fn pump(&mut self) {
@@ -479,6 +641,60 @@ impl App {
                         self.builds_fetched_at = Some(fetched_at);
                     } else {
                         self.builds_error = error;
+                    }
+                }
+                Ev::Catalog {
+                    mods,
+                    fetched_at,
+                    error,
+                } => {
+                    self.catalog_loading = false;
+                    if !mods.is_empty() {
+                        self.catalog = mods;
+                        self.catalog_loaded = true;
+                        self.catalog_error = None;
+                        self.catalog_fetched_at = Some(fetched_at);
+                        // Обложки могли измениться — старые текстуры больше не нужны.
+                        self.catalog_covers.clear();
+                        self.catalog_cover_pending.clear();
+                        self.catalog_cover_failed.clear();
+                    } else {
+                        self.catalog_error = error;
+                    }
+                }
+                Ev::Cover { key, result } => {
+                    self.catalog_cover_pending.remove(&key);
+                    match result {
+                        Ok(cover) => {
+                            if cover.frames.is_empty() {
+                                self.catalog_cover_failed.insert(key);
+                                continue;
+                            }
+                            let mut frames = Vec::with_capacity(cover.frames.len());
+                            let mut delays = Vec::with_capacity(cover.frames.len());
+                            let total = cover.delays.iter().sum::<f32>();
+                            for (index, image) in cover.frames.into_iter().enumerate() {
+                                frames.push(self.ctx.load_texture(
+                                    format!("catalog-cover-{key}-{index}"),
+                                    image,
+                                    egui::TextureOptions::LINEAR,
+                                ));
+                                delays.push(cover.delays.get(index).copied().unwrap_or(0.0));
+                            }
+                            self.catalog_covers.insert(
+                                key,
+                                CoverAnim {
+                                    frames,
+                                    delays,
+                                    total,
+                                },
+                            );
+                        }
+                        Err(_) => {
+                            // Битая или недоступная картинка: не пытаемся
+                            // скачивать её каждый кадр.
+                            self.catalog_cover_failed.insert(key);
+                        }
                     }
                 }
                 Ev::Log(text) => {
@@ -800,7 +1016,9 @@ impl App {
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if self.builds_loading {
-                        ui.spinner();
+                        if let Some(loading) = &self.loading {
+                            loading.show(ui, 24.0);
+                        }
                         ui.label(
                             RichText::new(pick("обновление каталога…", "updating catalog…"))
                                 .size(11.0)
@@ -919,11 +1137,7 @@ impl App {
                             .color(p.text),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                        let close = egui::Button::new(RichText::new("✕").size(13.0).color(p.muted))
-                            .frame(false)
-                            .rounding(8.0);
-                        if ui
-                            .add(close)
+                        if w::close(ui, &p)
                             .on_hover_text(pick("Закрыть", "Close"))
                             .clicked()
                         {
@@ -1011,6 +1225,10 @@ impl App {
             && self.rename.is_none()
             && self.confirm.is_none()
             && self.launch_opts.is_none()
+            && self.catalog_selected.is_none()
+            && self.catalog_pending.is_none()
+            && self.catalog_build.is_none()
+            && self.mod_cfg.is_none()
         {
             return;
         }
@@ -1103,11 +1321,7 @@ impl App {
                         );
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                        let close = egui::Button::new(RichText::new("✕").size(13.0).color(p.muted))
-                            .frame(false)
-                            .rounding(8.0);
-                        if ui
-                            .add(close)
+                        if w::close(ui, &p)
                             .on_hover_text(pick("Закрыть", "Close"))
                             .clicked()
                         {
@@ -1229,8 +1443,10 @@ impl App {
                     |ui| {
                         if self.builds_loading && self.builds.is_empty() {
                             ui.vertical_centered(|ui| {
-                                ui.add_space(list_height / 2.0 - 20.0);
-                                ui.spinner();
+                                ui.add_space(list_height / 2.0 - 28.0);
+                                if let Some(loading) = &self.loading {
+                                    loading.show(ui, 56.0);
+                                }
                             });
                         } else if self.builds.is_empty() {
                             ui.add_space(16.0);
@@ -1398,11 +1614,7 @@ impl App {
                         );
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                        let close = egui::Button::new(RichText::new("✕").size(13.0).color(p.muted))
-                            .frame(false)
-                            .rounding(8.0);
-                        if ui
-                            .add(close)
+                        if w::close(ui, &p)
                             .on_hover_text(pick("Закрыть", "Close"))
                             .clicked()
                         {
@@ -1531,11 +1743,7 @@ impl App {
                         );
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                        let close = egui::Button::new(RichText::new("✕").size(13.0).color(p.muted))
-                            .frame(false)
-                            .rounding(8.0);
-                        if ui
-                            .add(close)
+                        if w::close(ui, &p)
                             .on_hover_text(pick("Закрыть", "Close"))
                             .clicked()
                         {
@@ -1755,9 +1963,35 @@ impl eframe::App for App {
             self.launch_opts = None;
             self.launch_opts_focus = false;
         }
+        let esc = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+        let mod_esc = self.mod_cfg.is_some() && esc;
+        if mod_esc {
+            self.mod_cfg = None;
+        }
+        let catalog_esc = esc && self.player_id.is_none() && !mod_esc;
+        if catalog_esc {
+            if self.catalog_pending.is_some() {
+                self.catalog_pending = None;
+            } else if self.catalog_build.is_some() {
+                self.catalog_build = None;
+                self.catalog_build_focus = false;
+            } else if self.catalog_selected.is_some() {
+                self.catalog_selected = None;
+            }
+        }
+
+        // Каталог подгружается при первом открытии вкладки. Если загрузка
+        // уже падала, сами не повторяем — ждём кнопку «Обновить».
+        if self.tab == Tab::Catalog
+            && !self.catalog_loaded
+            && !self.catalog_loading
+            && self.catalog_error.is_none()
+        {
+            self.refresh_catalog();
+        }
 
         let busy = self.progress.is_some() || self.builds_loading;
-        if busy {
+        if busy || self.catalog_loading {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
 
@@ -1827,6 +2061,11 @@ impl eframe::App for App {
         self.draw_create_dialog(ctx);
         self.draw_rename_dialog(ctx);
         self.draw_launch_opts_dialog(ctx);
+        self.draw_catalog_details(ctx);
+        self.draw_catalog_pending(ctx);
+        self.draw_catalog_build(ctx);
+        self.draw_mod_settings(ctx);
+        self.draw_player(ctx, frame);
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {

@@ -3,6 +3,7 @@
 use egui::{RichText, Vec2};
 
 use crate::app::App;
+use crate::config::ProxyKind;
 use crate::i18n::{fill, pick, Lang};
 use crate::theme::Palette;
 use crate::ui::widgets as w;
@@ -19,6 +20,7 @@ impl App {
         let mut clear_cache = false;
         let mut refresh_builds = false;
         let mut apply_proxy = false;
+        let mut disable_proxy = false;
 
         egui::ScrollArea::vertical()
             .id_salt("settings_scroll")
@@ -188,12 +190,13 @@ impl App {
                 // --- Поведение --------------------------------------------------
                 settings_card(ui, &p, pick("ПОВЕДЕНИЕ", "BEHAVIOUR"), |ui| {
                     let before_theme = self.cfg.light_theme;
-                    if ui
-                        .checkbox(
-                            &mut self.cfg.keep_archives,
-                            pick("Оставлять скачанные архивы", "Keep downloaded archives"),
-                        )
-                        .changed()
+                    if w::toggle(
+                        ui,
+                        &mut self.cfg.keep_archives,
+                        pick("Оставлять скачанные архивы", "Keep downloaded archives"),
+                        &p,
+                    )
+                    .changed()
                     {
                         dirty = true;
                     }
@@ -208,35 +211,41 @@ impl App {
                         .color(p.muted),
                     );
                     ui.add_space(4.0);
-                    if ui
-                        .checkbox(
-                            &mut self.cfg.confirm_delete,
-                            pick(
-                                "Спрашивать подтверждение перед удалением",
-                                "Ask for confirmation before deleting",
-                            ),
-                        )
-                        .changed()
+                    if w::toggle(
+                        ui,
+                        &mut self.cfg.confirm_delete,
+                        pick(
+                            "Спрашивать подтверждение перед удалением",
+                            "Ask for confirmation before deleting",
+                        ),
+                        &p,
+                    )
+                    .changed()
                     {
                         dirty = true;
                     }
                     ui.add_space(4.0);
-                    if ui
-                        .checkbox(
-                            &mut self.cfg.auto_refresh,
-                            pick(
-                                "Проверять каталог сборок при запуске",
-                                "Check the build catalog on startup",
-                            ),
-                        )
-                        .changed()
+                    if w::toggle(
+                        ui,
+                        &mut self.cfg.auto_refresh,
+                        pick(
+                            "Проверять каталог сборок при запуске",
+                            "Check the build catalog on startup",
+                        ),
+                        &p,
+                    )
+                    .changed()
                     {
                         dirty = true;
                     }
                     ui.add_space(4.0);
-                    if ui
-                        .checkbox(&mut self.cfg.light_theme, pick("Светлая тема", "Light theme"))
-                        .changed()
+                    if w::toggle(
+                        ui,
+                        &mut self.cfg.light_theme,
+                        pick("Светлая тема", "Light theme"),
+                        &p,
+                    )
+                    .changed()
                     {
                         dirty = true;
                         if before_theme != self.cfg.light_theme {
@@ -251,21 +260,61 @@ impl App {
                 settings_card(ui, &p, pick("СЕТЬ", "NETWORK"), |ui| {
                     ui.label(
                         RichText::new(pick(
-                            "Свой прокси для скачивания сборок и каталога. Оставьте поле пустым, \
-                             чтобы подключаться напрямую.",
-                            "A custom proxy for downloading builds and the catalog. Leave the field \
-                             empty to connect directly.",
+                            "Свой прокси для скачивания сборок и каталога.",
+                            "A custom proxy for downloading builds and the catalog.",
                         ))
                         .size(12.0)
                         .color(p.muted),
                     );
                     ui.add_space(8.0);
+
+                    let mut use_proxy = !self.cfg.proxy.trim().is_empty();
+                    if w::toggle(
+                        ui,
+                        &mut use_proxy,
+                        pick("Использовать прокси", "Use a proxy"),
+                        &p,
+                    )
+                    .changed()
+                    {
+                        if use_proxy {
+                            if self.proxy_input.trim().is_empty() {
+                                self.toast(
+                                    pick(
+                                        "Сначала укажите адрес прокси",
+                                        "Enter the proxy address first",
+                                    ),
+                                    false,
+                                );
+                            } else {
+                                apply_proxy = true;
+                            }
+                        } else {
+                            disable_proxy = true;
+                        }
+                    }
+                    ui.add_space(6.0);
+
                     ui.horizontal(|ui| {
+                        ui.spacing_mut().interact_size.y = 34.0;
+                        egui::ComboBox::from_id_salt("proxy_kind")
+                            .width(104.0)
+                            .selected_text(RichText::new(self.proxy_kind.label()).size(12.5))
+                            .show_ui(ui, |ui| {
+                                for kind in [ProxyKind::Http, ProxyKind::Socks5] {
+                                    if ui
+                                        .selectable_label(self.proxy_kind == kind, kind.label())
+                                        .clicked()
+                                    {
+                                        self.proxy_kind = kind;
+                                    }
+                                }
+                            });
                         w::text_input_sized(
                             ui,
                             &mut self.proxy_input,
-                            "http://127.0.0.1:8080",
-                            Vec2::new(360.0, 32.0),
+                            "127.0.0.1:8080",
+                            Vec2::new(300.0, 34.0),
                         );
                         if w::primary(ui, pick("Применить", "Apply"), &p, !busy).clicked() {
                             apply_proxy = true;
@@ -274,22 +323,25 @@ impl App {
                     ui.add_space(4.0);
                     ui.label(
                         RichText::new(pick(
-                            "Поддерживаются HTTP- и SOCKS-прокси: http://host:port, socks5://host:port.",
-                            "HTTP and SOCKS proxies are supported: http://host:port, socks5://host:port.",
+                            "Адрес пишется без схемы: 127.0.0.1:8080. С логином и паролем — \
+                             user:pass@127.0.0.1:8080. Выключите переключатель, чтобы отключить прокси.",
+                            "Enter the address without a scheme: 127.0.0.1:8080. With a login and \
+                             password: user:pass@127.0.0.1:8080. Turn the switch off to disable the proxy.",
                         ))
                         .size(11.0)
                         .color(p.muted),
                     );
                     ui.add_space(8.0);
-                    if ui
-                        .checkbox(
-                            &mut self.cfg.retry_forever,
-                            pick(
-                                "Повторять оборвавшуюся загрузку без ограничений",
-                                "Retry interrupted downloads indefinitely",
-                            ),
-                        )
-                        .changed()
+                    if w::toggle(
+                        ui,
+                        &mut self.cfg.retry_forever,
+                        pick(
+                            "Повторять оборвавшуюся загрузку без ограничений",
+                            "Retry interrupted downloads indefinitely",
+                        ),
+                        &p,
+                    )
+                    .changed()
                     {
                         dirty = true;
                     }
@@ -449,6 +501,9 @@ impl App {
 
         if apply_proxy {
             self.apply_proxy();
+        }
+        if disable_proxy {
+            self.disable_proxy(true);
         }
 
         if clear_cache {

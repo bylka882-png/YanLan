@@ -9,6 +9,7 @@ use crate::config::Config;
 use crate::i18n::{fill, pick};
 use crate::installer;
 use crate::library::{write_meta, GameInstall, GameMeta, InstalledMod, Library};
+use crate::mods::{self, ModVariant};
 use crate::net;
 use crate::progress::Progress;
 use crate::util::{now_ts, sanitize_dir_name, sanitize_name};
@@ -18,6 +19,16 @@ pub enum Ev {
         builds: Vec<Build>,
         fetched_at: i64,
         error: Option<String>,
+    },
+    Catalog {
+        mods: Vec<mods::ModGroup>,
+        fetched_at: i64,
+        error: Option<String>,
+    },
+    /// Готовый скриншот каталога (декодирование шло в фоне).
+    Cover {
+        key: String,
+        result: Result<Cover, String>,
     },
     JobDone {
         /// Номер задачи (`Progress::id`), чтобы интерфейс не сбрасывал чужой прогресс.
@@ -145,6 +156,280 @@ pub fn fetch_builds(c: Ctx2, cfg: Config) -> Progress {
             });
             Err(err)
         }
+    });
+    p
+}
+
+/// Загружает каталог модов YanMod и кладёт его в кэш.
+pub fn fetch_catalog(c: Ctx2, cfg: Config) -> Progress {
+    let progress = Progress::new();
+    let p = progress.clone();
+    spawn_data(c, progress, move |c, p| match mods::fetch(p) {
+        Ok(list) => {
+            mods::save_cache(&cfg, &list);
+            c.emit(Ev::Catalog {
+                mods: list,
+                fetched_at: now_ts(),
+                error: None,
+            });
+            Ok(pick("Каталог модов обновлён", "Mod catalog updated").to_string())
+        }
+        Err(err) => {
+            c.emit(Ev::Catalog {
+                mods: Vec::new(),
+                fetched_at: now_ts(),
+                error: Some(err.clone()),
+            });
+            Err(err)
+        }
+    });
+    p
+}
+
+/// Декодированный скриншот: один кадр или анимация GIF.
+pub struct Cover {
+    pub frames: Vec<egui::ColorImage>,
+    /// Задержка каждого кадра в секундах.
+    pub delays: Vec<f32>,
+}
+
+/// Скачивает и декодирует один скриншот каталога в фоне.
+pub fn fetch_cover(c: Ctx2, cache_dir: std::path::PathBuf, key: String, url: String) {
+    thread::spawn(move || {
+        let result = (|| -> Result<Cover, String> {
+            let dir = cache_dir.join("covers");
+            std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            let file = dir.join(format!("{key}.img"));
+            let bytes = if file.exists() {
+                std::fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))?
+            } else {
+                let bytes = net::get_bytes(&url)?;
+                let _ = std::fs::write(&file, &bytes);
+                bytes
+            };
+            decode_cover(&bytes, &key)
+        })();
+        if result.is_err() {
+            // Битый кэш не должен мешать повторной попытке.
+            let _ = std::fs::remove_file(cache_dir.join("covers").join(format!("{key}.img")));
+        }
+        c.emit(Ev::Cover { key, result });
+    });
+}
+
+fn decode_cover(bytes: &[u8], key: &str) -> Result<Cover, String> {
+    let format = image::guess_format(bytes).map_err(|e| format!("cover {key}: {e}"))?;
+    if format == image::ImageFormat::Gif {
+        let decoder = image::codecs::gif::GifDecoder::new(std::io::Cursor::new(bytes))
+            .map_err(|e| format!("cover {key}: {e}"))?;
+        let frames = image::AnimationDecoder::into_frames(decoder)
+            .collect_frames()
+            .map_err(|e| format!("cover {key}: {e}"))?;
+        let mut out = Cover {
+            frames: Vec::with_capacity(frames.len()),
+            delays: Vec::with_capacity(frames.len()),
+        };
+        for frame in frames {
+            let (num, den) = frame.delay().numer_denom_ms();
+            let delay = if den == 0 {
+                0.1
+            } else {
+                (num as f32 / den as f32 / 1000.0).clamp(0.02, 1.0)
+            };
+            let rgba = frame.into_buffer();
+            let (width, height) = rgba.dimensions();
+            out.delays.push(delay);
+            out.frames.push(egui::ColorImage::from_rgba_unmultiplied(
+                [width as usize, height as usize],
+                rgba.as_raw(),
+            ));
+        }
+        if out.frames.is_empty() {
+            return Err(format!("cover {key}: empty gif"));
+        }
+        return Ok(out);
+    }
+
+    let image = image::load_from_memory(bytes).map_err(|e| format!("cover {key}: {e}"))?;
+    let rgba = image.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    Ok(Cover {
+        frames: vec![egui::ColorImage::from_rgba_unmultiplied(
+            [width as usize, height as usize],
+            rgba.as_raw(),
+        )],
+        delays: vec![0.0],
+    })
+}
+
+fn download_catalog(
+    c: &Ctx2,
+    cfg: &Config,
+    variant: &ModVariant,
+    progress: &Progress,
+) -> Result<PathBuf, String> {
+    if variant.dl_url.trim().is_empty() {
+        return Err(fill(
+            &pick(
+                "У мода «{name}» нет ссылки на скачивание",
+                "The mod “{name}” has no download link",
+            ),
+            &[("name", &variant.name)],
+        ));
+    }
+    let filename = variant.download_name();
+    let dest = cfg.downloads_dir().join(&filename);
+    if dest.exists() {
+        progress.stage(pick("Архив уже скачан", "Archive already downloaded"));
+        c.log(fill(
+            &pick("Используем {path}", "Using {path}"),
+            &[("path", &dest.display().to_string())],
+        ));
+        return Ok(dest);
+    }
+    progress.stage(pick("Скачивание", "Downloading"));
+    progress.detail(&filename);
+    c.log(fill(
+        &pick("Скачивание: {url}", "Downloading: {url}"),
+        &[("url", &variant.dl_url)],
+    ));
+    net::download(&variant.dl_url, &dest, progress, cfg.retry_forever)?;
+    Ok(dest)
+}
+
+/// Устанавливает моды из каталога в выбранную сборку.
+///
+/// Список уже упорядочен: зависимости идут раньше основного мода.
+pub fn install_catalog_mods(
+    c: Ctx2,
+    cfg: Config,
+    game: GameInstall,
+    items: Vec<ModVariant>,
+) -> Progress {
+    let progress = Progress::new();
+    let p = progress.clone();
+    spawn(c, progress, move |c, p| {
+        if items.is_empty() {
+            return Err(pick("Нечего устанавливать", "Nothing to install").to_string());
+        }
+        let total = items.len();
+        let mut installed = Vec::new();
+        let mut library = Library::load(&cfg.root_dir);
+
+        for (index, variant) in items.iter().enumerate() {
+            if p.is_cancelled() {
+                return Err(pick("Установка отменена", "Installation cancelled").to_string());
+            }
+            p.stage(fill(
+                &pick(
+                    "Установка {name} ({index}/{total})",
+                    "Installing {name} ({index}/{total})",
+                ),
+                &[
+                    ("name", &variant.name),
+                    ("index", &(index + 1).to_string()),
+                    ("total", &total.to_string()),
+                ],
+            ));
+            if !variant.version.is_empty() {
+                p.detail(fill(
+                    &pick("версия {v}", "version {v}"),
+                    &[("v", &variant.version)],
+                ));
+            }
+            let archive = download_catalog(c, &cfg, variant, p)?;
+
+            // Ключ включает номер в очереди: установка нескольких модов
+            // за одну секунду не должна перетирать чужие резервные копии.
+            let key = format!("{}-{}-{}", sanitize_name(&variant.id), now_ts(), index);
+            let backup_dir = game.backups_dir().join(&key);
+            let staging = game.work_dir().join("tmp");
+            let files = installer::install_mod(&archive, &game.path, &backup_dir, &staging, p)?;
+
+            let mut item = InstalledMod::new(
+                &variant.id,
+                &variant.name,
+                variant.ty.code(),
+                &variant.author,
+                &game.meta.id,
+                files,
+            );
+            item.key = key;
+            item.cfg = variant.cfg.clone();
+            library.add(item);
+            library.save(&cfg.root_dir)?;
+
+            if !cfg.keep_archives {
+                let _ = std::fs::remove_file(&archive);
+            }
+            installed.push(variant.name.clone());
+        }
+
+        let names = installed.join(", ");
+        c.log(fill(
+            &pick(
+                "Установлено в {build}: {list}",
+                "Installed into {build}: {list}",
+            ),
+            &[("build", &game.display_name()), ("list", &names)],
+        ));
+        Ok(fill(
+            &pick(
+                "«{list}» установлены в {build}",
+                "“{list}” installed into {build}",
+            ),
+            &[("list", &names), ("build", &game.display_name())],
+        ))
+    });
+    p
+}
+
+/// Устанавливает мод типа `Build` как отдельную сборку игры.
+pub fn install_catalog_build(c: Ctx2, cfg: Config, variant: ModVariant, name: String) -> Progress {
+    let progress = Progress::new();
+    let p = progress.clone();
+    spawn(c, progress, move |c, p| {
+        cfg.ensure_dirs();
+        let label = name.trim().to_string();
+        if label.is_empty() {
+            return Err(pick("Укажите название сборки", "Enter a build name").to_string());
+        }
+        let dir_name = sanitize_dir_name(&label);
+        let target = cfg.games_dir().join(&dir_name);
+        if target.exists() {
+            return Err(fill(
+                &pick(
+                    "Сборка «{name}» уже существует. Выберите другое название.",
+                    "Build “{name}” already exists. Choose another name.",
+                ),
+                &[("name", &label)],
+            ));
+        }
+
+        let archive = download_catalog(c, &cfg, &variant, p)?;
+        p.stage(pick("Установка сборки", "Installing build"));
+        p.detail(label.clone());
+        let staging = cfg.games_dir().join(format!(".staging-{dir_name}"));
+        installer::install_game(&archive, &target, &staging, p)?;
+
+        let meta = GameMeta {
+            id: dir_name,
+            label: label.clone(),
+            version: variant.version.clone(),
+            date: None,
+            source: format!("YanMod · {}", variant.name),
+            installed_at: now_ts(),
+            args: String::new(),
+        };
+        write_meta(&target, &meta)?;
+
+        if !cfg.keep_archives {
+            let _ = std::fs::remove_file(&archive);
+        }
+        Ok(fill(
+            &pick("Сборка «{name}» создана", "Build “{name}” created"),
+            &[("name", &label)],
+        ))
     });
     p
 }

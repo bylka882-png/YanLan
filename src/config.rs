@@ -40,6 +40,47 @@ impl SortBy {
     }
 }
 
+/// Тип прокси, который выбирается в настройках.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ProxyKind {
+    Http,
+    Socks5,
+}
+
+impl ProxyKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            ProxyKind::Http => "HTTP",
+            ProxyKind::Socks5 => "SOCKS5",
+        }
+    }
+
+    pub fn scheme(self) -> &'static str {
+        match self {
+            ProxyKind::Http => "http://",
+            ProxyKind::Socks5 => "socks5://",
+        }
+    }
+
+    /// Разбирает сохранённый адрес на тип и «хост:порт». Схему можно не писать —
+    /// тогда используется HTTP.
+    pub fn split(url: &str) -> (Self, String) {
+        let url = url.trim();
+        let lower = url.to_ascii_lowercase();
+        for (prefix, kind) in [
+            ("socks5h://", ProxyKind::Socks5),
+            ("socks5://", ProxyKind::Socks5),
+            ("http://", ProxyKind::Http),
+            ("https://", ProxyKind::Http),
+        ] {
+            if lower.starts_with(prefix) {
+                return (kind, url[prefix.len()..].to_string());
+            }
+        }
+        (ProxyKind::Http, url.to_string())
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -134,5 +175,27 @@ impl Config {
         let _ = std::fs::create_dir_all(self.games_dir());
         let _ = std::fs::create_dir_all(self.downloads_dir());
         let _ = std::fs::create_dir_all(self.cache_dir());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn splits_proxy_address_and_kind() {
+        assert_eq!(
+            ProxyKind::split("socks5://127.0.0.1:1080"),
+            (ProxyKind::Socks5, "127.0.0.1:1080".to_string())
+        );
+        assert_eq!(
+            ProxyKind::split("HTTP://user:pass@127.0.0.1:8080"),
+            (ProxyKind::Http, "user:pass@127.0.0.1:8080".to_string())
+        );
+        // Без схемы адрес остаётся как есть, тип выбирается отдельно.
+        assert_eq!(
+            ProxyKind::split(" 127.0.0.1:8080 "),
+            (ProxyKind::Http, "127.0.0.1:8080".to_string())
+        );
     }
 }
