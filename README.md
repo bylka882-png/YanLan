@@ -4,8 +4,6 @@
 
 ![version](https://img.shields.io/badge/version-1.9.5-ff4d8d) ![license](https://img.shields.io/badge/license-CC%20BY--NC%204.0-lightgrey)
 
-<img width="160" height="160" alt="11043" src="https://github.com/user-attachments/assets/38c170aa-3f19-4977-b12f-d9ecbc6238f6" />
-
 ## Возможности
 
 - Независимые сборки в `games/<название>`. Версии игры 2014–2026 берутся с официального сайта и зеркал archive.org.
