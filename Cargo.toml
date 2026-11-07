@@ -1,5 +1,5 @@
 [package]
-name = "yanlan"
+name = "YanLan"
 version = "2.0.0"
 edition = "2021"
 description = "Неофициальный лаунчер Yandere Simulator: отдельные сборки, моды и архив версий"
@@ -10,7 +10,7 @@ publish = false
 
 [package.metadata]
 # Файлы, которые имеет смысл прикладывать к релизу.
-release-files = ["yanlan.exe", "README.md", "CHANGELOG.md", "LICENSE.md"]
+release-files = ["YanLan.exe", "README.md", "CHANGELOG.md", "LICENSE.md"]
 
 [dependencies]
 eframe = { version = "0.29", default-features = false, features = [
