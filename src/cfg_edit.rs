@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use egui::{RichText, Vec2};
 
 use crate::app::App;
-use crate::i18n::{fill, pick};
+use crate::i18n::{fill, is_ru, pick};
 use crate::theme::Palette;
 use crate::ui::widgets as w;
 
@@ -72,6 +72,9 @@ pub struct Editor {
     trailing_newline: bool,
     error: Option<String>,
     query: String,
+    /// Исходный текст файла и режим «обычный текст».
+    raw: String,
+    text_mode: bool,
 }
 
 impl Editor {
@@ -98,6 +101,8 @@ impl Editor {
             trailing_newline,
             error: None,
             query: String::new(),
+            raw: text.to_string(),
+            text_mode: false,
         })
     }
 
@@ -154,46 +159,75 @@ impl Editor {
                         {
                             close = true;
                         }
+                        let label = if self.text_mode {
+                            pick("Визуальный редактор", "Visual editor")
+                        } else {
+                            pick("Обычный текст", "Plain text")
+                        };
+                        if w::soft(ui, label, p, true).clicked() {
+                            if self.text_mode {
+                                self.apply_raw();
+                            } else {
+                                self.raw = self.render_lines();
+                            }
+                            self.text_mode = !self.text_mode;
+                            self.error = None;
+                        }
                     });
                 });
                 ui.add_space(12.0);
-                w::text_input(
-                    ui,
-                    &mut self.query,
-                    pick("Поиск по параметрам", "Search settings"),
-                    30.0,
-                );
-                ui.add_space(8.0);
+                if self.text_mode {
+                    egui::ScrollArea::vertical()
+                        .id_salt("mod_cfg_raw_scroll")
+                        .max_height(max_height)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::TextEdit::multiline(&mut self.raw)
+                                    .code_editor()
+                                    .desired_width(f32::INFINITY)
+                                    .desired_rows(20),
+                            );
+                        });
+                } else {
+                    w::text_input(
+                        ui,
+                        &mut self.query,
+                        pick("Поиск по параметрам", "Search settings"),
+                        30.0,
+                    );
+                    ui.add_space(8.0);
 
-                egui::ScrollArea::vertical()
-                    .id_salt("mod_cfg_scroll")
-                    .max_height(max_height)
-                    .auto_shrink([false, true])
-                    .show(ui, |ui| {
-                        let mut section = String::new();
-                        let mut shown = 0usize;
-                        for setting in self.settings.iter_mut() {
-                            if !setting.matches(&query) {
-                                continue;
-                            }
-                            if setting.section != section {
-                                section = setting.section.clone();
-                                if shown > 0 {
-                                    ui.add_space(10.0);
+                    egui::ScrollArea::vertical()
+                        .id_salt("mod_cfg_scroll")
+                        .max_height(max_height)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            let mut section = String::new();
+                            let mut shown = 0usize;
+                            for setting in self.settings.iter_mut() {
+                                if !setting.matches(&query) {
+                                    continue;
                                 }
-                                if !section.is_empty() {
-                                    w::section_title(ui, &section, p);
+                                if setting.section != section {
+                                    section = setting.section.clone();
+                                    if shown > 0 {
+                                        ui.add_space(10.0);
+                                    }
+                                    if !section.is_empty() {
+                                        w::section_title(ui, &section_label(&section), p);
+                                    }
                                 }
+                                shown += 1;
+                                setting_row(ui, p, setting);
+                                ui.add_space(7.0);
                             }
-                            shown += 1;
-                            setting_row(ui, p, setting);
-                            ui.add_space(7.0);
-                        }
-                        if shown == 0 {
-                            ui.add_space(10.0);
-                            w::muted(ui, pick("Ничего не найдено", "Nothing found"), p);
-                        }
-                    });
+                            if shown == 0 {
+                                ui.add_space(10.0);
+                                w::muted(ui, pick("Ничего не найдено", "Nothing found"), p);
+                            }
+                        });
+                }
 
                 if let Some(error) = &self.error {
                     ui.add_space(8.0);
@@ -233,7 +267,32 @@ impl Editor {
         None
     }
 
+    fn render_lines(&self) -> String {
+        let mut text = self.lines.join(&self.newline);
+        if self.trailing_newline {
+            text.push_str(&self.newline);
+        }
+        text
+    }
+
+    /// Перечитывает визуальные настройки из текста.
+    fn apply_raw(&mut self) {
+        self.newline = if self.raw.contains("\r\n") {
+            "\r\n"
+        } else {
+            "\n"
+        }
+        .to_string();
+        self.trailing_newline = self.raw.ends_with('\n');
+        self.lines = self.raw.lines().map(str::to_string).collect();
+        self.settings = parse(&self.lines);
+    }
+
     fn save(&mut self) -> Result<(), String> {
+        if self.text_mode {
+            return std::fs::write(&self.path, &self.raw)
+                .map_err(|e| format!("{}: {e}", self.path.display()));
+        }
         for setting in &self.settings {
             let Some(line) = self.lines.get_mut(setting.line) else {
                 continue;
@@ -476,7 +535,7 @@ fn format_color(rgba: &[f32; 4], components: usize) -> String {
     parts.join(",")
 }
 
-/// Подписи известных параметров Pose Mod; остальные остаются как в файле.
+/// Подписи известных параметров конфигов; остальные остаются как в файле.
 fn setting_label(key: &str) -> String {
     if let Some(rest) = key.strip_prefix("LoadOrder_") {
         return fill(
@@ -485,6 +544,7 @@ fn setting_label(key: &str) -> String {
         );
     }
     let label = match key {
+        // Pose Mod
         "UIColor" => pick("Цвет интерфейса", "Interface color"),
         "MiniMenuTextColor" => pick("Цвет текста мини-меню", "Mini-menu text color"),
         "MiniMenuTextOutlineColor" => pick("Обводка текста мини-меню", "Mini-menu text outline"),
@@ -502,9 +562,430 @@ fn setting_label(key: &str) -> String {
         "MenuColor" => pick("Цвет меню", "Menu color"),
         "TextColor" => pick("Цвет текста", "Text color"),
         "TextShadowColor" => pick("Тень текста", "Text shadow color"),
+        // BepInEx
+        "EnableAssemblyCache" => pick("Кэш метаданных сборок", "Assembly metadata cache"),
+        "HideManagerGameObject" => pick("Скрывать Manager GameObject", "Hide Manager GameObject"),
+        "LogChannels" => pick("Каналы логов", "Log channels"),
+        "UnityLogListening" => pick("Слушать лог Unity", "Listen to the Unity log"),
+        "LogConsoleToUnityLog" => pick(
+            "Писать консоль в лог Unity",
+            "Write console to the Unity log",
+        ),
+        "Enabled" => pick("Включено", "Enabled"),
+        "PreventClose" => pick("Запретить закрытие консоли", "Prevent closing the console"),
+        "ShiftJisEncoding" => pick("Кодировка Shift-JIS", "Shift-JIS encoding"),
+        "StandardOutType" => pick("Тип стандартного вывода", "Standard output type"),
+        "LogLevels" => pick("Уровни логов", "Log levels"),
+        "WriteUnityLog" => pick("Писать в лог Unity", "Write to the Unity log"),
+        "AppendLog" => pick("Дописывать лог", "Append to the log"),
+        "ApplyRuntimePatches" => pick("Патчи во время выполнения", "Apply runtime patches"),
+        "HarmonyBackend" => pick("Бэкенд Harmony", "Harmony backend"),
+        "DumpAssemblies" => pick("Сохранять сборки", "Dump assemblies"),
+        "LoadDumpedAssemblies" => pick("Загружать сохранённые сборки", "Load dumped assemblies"),
+        "BreakBeforeLoadAssemblies" => pick(
+            "Пауза перед загрузкой сборок",
+            "Break before loading assemblies",
+        ),
+        "Assembly" => pick("Сборка", "Assembly"),
+        "Type" => pick("Тип", "Type"),
+        "Method" => pick("Метод", "Method"),
+        // Resource Unload Optimizations
+        "Disable Resource Unload" => pick("Отключить выгрузку ресурсов", "Disable resource unload"),
+        "Optimize Memory Usage" => pick("Оптимизировать память", "Optimize memory usage"),
+        "Optimize Memory Threshold" => {
+            pick("Порог оптимизации памяти", "Optimize memory threshold")
+        }
+        // Configuration Manager
+        "Show advanced" => pick("Показывать расширенные", "Show advanced"),
+        "Show keybinds" => pick("Показывать горячие клавиши", "Show keybinds"),
+        "Show settings" => pick("Показывать настройки", "Show settings"),
+        "Show config manager" => pick("Показывать менеджер конфигурации", "Show config manager"),
+        "Hide single sections" => pick("Скрывать одиночные разделы", "Hide single sections"),
+        "Plugin collapsed default" => pick(
+            "Плагины свёрнуты по умолчанию",
+            "Plugin collapsed by default",
+        ),
+        // XUnity.AutoTranslator
+        "Endpoint" => pick("Сервис перевода", "Translation service"),
+        "FallbackEndpoint" => pick("Резервный сервис", "Fallback service"),
+        "Language" => pick("Язык перевода", "Translation language"),
+        "FromLanguage" => pick("Исходный язык", "Source language"),
+        "Directory" => pick("Папка переводов", "Translations folder"),
+        "OutputFile" => pick("Файл вывода", "Output file"),
+        "SubstitutionFile" => pick("Файл подстановок", "Substitution file"),
+        "PreprocessorsFile" => pick("Файл препроцессоров", "Preprocessors file"),
+        "PostprocessorsFile" => pick("Файл постпроцессоров", "Postprocessors file"),
+        "EnableIMGUI" => pick("Перевод IMGUI", "Translate IMGUI"),
+        "EnableUGUI" => pick("Перевод UGUI", "Translate UGUI"),
+        "EnableUIElements" => pick("Перевод UI Elements", "Translate UI Elements"),
+        "EnableNGUI" => pick("Перевод NGUI", "Translate NGUI"),
+        "EnableTextMeshPro" => pick("Перевод TextMeshPro", "Translate TextMeshPro"),
+        "EnableTextMesh" => pick("Перевод TextMesh", "Translate TextMesh"),
+        "EnableFairyGUI" => pick("Перевод FairyGUI", "Translate FairyGUI"),
+        "MaxCharactersPerTranslation" => pick(
+            "Максимум символов на перевод",
+            "Max characters per translation",
+        ),
+        "IgnoreWhitespaceInDialogue" => pick(
+            "Игнорировать пробелы в диалогах",
+            "Ignore whitespace in dialogue",
+        ),
+        "MinDialogueChars" => pick("Минимум символов в диалоге", "Min dialogue characters"),
+        "ForceSplitTextAfterCharacters" => pick(
+            "Разбивать текст после N символов",
+            "Force split text after characters",
+        ),
+        "CopyToClipboard" => pick("Копировать в буфер обмена", "Copy to clipboard"),
+        "MaxClipboardCopyCharacters" => pick(
+            "Максимум символов для копирования",
+            "Max clipboard copy characters",
+        ),
+        "ClipboardDebounceTime" => pick("Задержка буфера обмена", "Clipboard debounce time"),
+        "EnableUIResizing" => pick("Менять размер интерфейса", "Enable UI resizing"),
+        "EnableBatching" => pick("Пакетный перевод", "Enable batching"),
+        "UseStaticTranslations" => pick("Статические переводы", "Use static translations"),
+        "OverrideFont" => pick("Заменить шрифт", "Override font"),
+        "OverrideFontSize" => pick("Заменить размер шрифта", "Override font size"),
+        "OverrideFontTextMeshPro" => {
+            pick("Заменить шрифт TextMeshPro", "Override TextMeshPro font")
+        }
+        "FallbackFontTextMeshPro" => {
+            pick("Резервный шрифт TextMeshPro", "Fallback TextMeshPro font")
+        }
+        "ResizeUILineSpacingScale" => {
+            pick("Масштаб межстрочного интервала", "UI line spacing scale")
+        }
+        "ForceUIResizing" => pick("Принудительно менять размер UI", "Force UI resizing"),
+        "IgnoreTextStartingWith" => pick(
+            "Игнорировать текст, начинающийся с",
+            "Ignore text starting with",
+        ),
+        "TextGetterCompatibilityMode" => pick(
+            "Режим совместимости текста",
+            "Text getter compatibility mode",
+        ),
+        "GameLogTextPaths" => pick("Пути текста в логе игры", "Game log text paths"),
+        "RomajiPostProcessing" => pick("Постобработка ромадзи", "Romaji post-processing"),
+        "TranslationPostProcessing" => {
+            pick("Постобработка перевода", "Translation post-processing")
+        }
+        "RegexPostProcessing" => pick("Постобработка регулярками", "Regex post-processing"),
+        "CacheRegexPatternResults" => {
+            pick("Кэшировать результаты regex", "Cache regex pattern results")
+        }
+        "PersistRichTextMode" => pick("Режим сохранения Rich Text", "Persist rich text mode"),
+        "CacheRegexLookups" => pick("Кэшировать поиск regex", "Cache regex lookups"),
+        "CacheWhitespaceDifferences" => pick(
+            "Кэшировать различия пробелов",
+            "Cache whitespace differences",
+        ),
+        "GenerateStaticSubstitutionTranslations" => pick(
+            "Создавать статические подстановки",
+            "Generate static substitution translations",
+        ),
+        "GeneratePartialTranslations" => pick(
+            "Создавать частичные переводы",
+            "Generate partial translations",
+        ),
+        "EnableTranslationScoping" => {
+            pick("Область видимости переводов", "Enable translation scoping")
+        }
+        "EnableSilentMode" => pick("Тихий режим", "Enable silent mode"),
+        "BlacklistedIMGUIPlugins" => {
+            pick("Заблокированные IMGUI-плагины", "Blacklisted IMGUI plugins")
+        }
+        "EnableTextPathLogging" => pick("Логировать пути текста", "Enable text path logging"),
+        "OutputUntranslatableText" => {
+            pick("Выводить непереводимый текст", "Output untranslatable text")
+        }
+        "IgnoreVirtualTextSetterCallingRules" => pick(
+            "Игнорировать правила виртуального текста",
+            "Ignore virtual text setter rules",
+        ),
+        "MaxTextParserRecursion" => pick("Глубина разбора текста", "Max text parser recursion"),
+        "HtmlEntityPreprocessing" => pick("Обработка HTML-сущностей", "HTML entity preprocessing"),
+        "HandleRichText" => pick("Обрабатывать Rich Text", "Handle rich text"),
+        "EnableTranslationHelper" => pick("Помощник перевода", "Enable translation helper"),
+        "ForceMonoModHooks" => pick("Принудительные хуки MonoMod", "Force MonoMod hooks"),
+        "InitializeHarmonyDetourBridge" => pick(
+            "Инициализировать HarmonyDetourBridge",
+            "Initialize HarmonyDetourBridge",
+        ),
+        "RedirectedResourceDetectionStrategy" => {
+            pick("Стратегия поиска ресурсов", "Redirected resource detection")
+        }
+        "OutputTooLongText" => pick("Выводить слишком длинный текст", "Output too long text"),
+        "TemplateAllNumberAway" => pick("Шаблон для всех чисел", "Template all numbers away"),
+        "ReloadTranslationsOnFileChange" => pick(
+            "Перезагружать переводы при изменении",
+            "Reload translations on file change",
+        ),
+        "DisableTextMeshProScrollInEffects" => pick(
+            "Отключить эффекты TextMeshPro",
+            "Disable TextMeshPro scroll effects",
+        ),
+        "CacheParsedTranslations" => pick(
+            "Кэшировать разобранные переводы",
+            "Cache parsed translations",
+        ),
+        "TextureDirectory" => pick("Папка текстур", "Texture directory"),
+        "EnableTextureTranslation" => pick("Перевод текстур", "Enable texture translation"),
+        "EnableTextureDumping" => pick("Выгрузка текстур", "Enable texture dumping"),
+        "EnableTextureToggling" => pick("Переключение текстур", "Enable texture toggling"),
+        "EnableTextureScanOnSceneLoad" => pick(
+            "Сканировать текстуры при загрузке",
+            "Scan textures on scene load",
+        ),
+        "EnableSpriteRendererHooking" => {
+            pick("Перехват SpriteRenderer", "Enable SpriteRenderer hooking")
+        }
+        "LoadUnmodifiedTextures" => pick(
+            "Загружать неизменённые текстуры",
+            "Load unmodified textures",
+        ),
+        "DetectDuplicateTextureNames" => pick(
+            "Искать дубликаты имён текстур",
+            "Detect duplicate texture names",
+        ),
+        "DuplicateTextureNames" => pick("Дубликаты имён текстур", "Duplicate texture names"),
+        "EnableLegacyTextureLoading" => {
+            pick("Старая загрузка текстур", "Enable legacy texture loading")
+        }
+        "TextureHashGenerationStrategy" => {
+            pick("Стратегия хэша текстур", "Texture hash generation")
+        }
+        "CacheTexturesInMemory" => pick("Кэшировать текстуры в памяти", "Cache textures in memory"),
+        "EnableSpriteHooking" => pick("Перехват спрайтов", "Enable sprite hooking"),
+        "PreferredStoragePath" => pick("Предпочитаемый путь хранения", "Preferred storage path"),
+        "EnableTextAssetRedirector" => {
+            pick("Перенаправление TextAsset", "Enable TextAsset redirector")
+        }
+        "LogAllLoadedResources" => {
+            pick("Логировать загруженные ресурсы", "Log all loaded resources")
+        }
+        "EnableDumping" => pick("Включить выгрузку", "Enable dumping"),
+        "CacheMetadataForAllFiles" => pick(
+            "Кэшировать метаданные файлов",
+            "Cache metadata for all files",
+        ),
+        "UserAgent" => pick("User-Agent", "User-Agent"),
+        "DisableCertificateValidation" => pick(
+            "Отключить проверку сертификата",
+            "Disable certificate validation",
+        ),
+        "Width" => pick("Ширина", "Width"),
+        "Height" => pick("Высота", "Height"),
+        "EnabledTranslators" => pick("Включённые переводчики", "Enabled translators"),
+        "EnableConsole" => pick("Консоль", "Enable console"),
+        "Enable" => pick("Включить", "Enable"),
+        "Tag" => pick("Тег", "Tag"),
+        "BaiduAppId" => pick("Baidu App ID", "Baidu App ID"),
+        "BaiduAppSecret" => pick("Baidu App Secret", "Baidu App Secret"),
+        "DelaySeconds" => pick("Задержка (сек)", "Delay (seconds)"),
+        "OcpApimSubscriptionKey" => pick("Ключ Azure", "Azure subscription key"),
+        "Url" => pick("Адрес", "URL"),
+        "EnableShortDelay" => pick("Короткая задержка", "Enable short delay"),
+        "DisableSpamChecks" => pick("Отключить проверку спама", "Disable spam checks"),
+        "ExecutableLocation" => pick("Путь к программе", "Executable location"),
+        "MinDelaySeconds" => pick("Минимальная задержка (сек)", "Min delay (seconds)"),
+        "MaxDelaySeconds" => pick("Максимальная задержка (сек)", "Max delay (seconds)"),
+        "ApiKey" => pick("API-ключ", "API key"),
+        "Free" => pick("Бесплатный режим", "Free mode"),
+        "InstallationPath" => pick("Путь установки", "Installation path"),
+        "ServiceUrl" => pick("Адрес сервиса", "Service URL"),
+        "RPCID" => pick("RPC ID", "RPC ID"),
+        "VERSION" => pick("Версия", "Version"),
+        "UseSimplest" => pick("Простой режим", "Use simplest"),
+        "GoogleAPIKey" => pick("Google API-ключ", "Google API key"),
+        "LingoCloudToken" => pick("Токен LingoCloud", "LingoCloud token"),
+        "Key" => pick("Ключ", "Key"),
+        "YandexAPIKey" => pick("Яндекс API-ключ", "Yandex API key"),
         _ => return key.to_string(),
     };
     label.to_string()
+}
+
+/// Русские названия разделов известных конфигов.
+fn section_label(section: &str) -> String {
+    let label = match section {
+        "Caching" => pick("Кэширование", "Caching"),
+        "Chainloader" => pick("Загрузчик", "Chainloader"),
+        "Harmony.Logger" => pick("Лог Harmony", "Harmony logger"),
+        "Logging" => pick("Логирование", "Logging"),
+        "Logging.Console" => pick("Консоль", "Console"),
+        "Logging.Disk" => pick("Лог на диск", "Disk log"),
+        "Preloader" => pick("Прелоадер", "Preloader"),
+        "Preloader.Entrypoint" => pick("Точка входа", "Entrypoint"),
+        "Unload Throttling" => pick("Ограничение выгрузки", "Unload throttling"),
+        "Filtering" => pick("Фильтрация", "Filtering"),
+        "General" => pick("Общие", "General"),
+        "Service" => pick("Сервис", "Service"),
+        "Files" => pick("Файлы", "Files"),
+        "TextFrameworks" => pick("Текстовые фреймворки", "Text frameworks"),
+        "Behaviour" => pick("Поведение", "Behaviour"),
+        "Texture" => pick("Текстуры", "Texture"),
+        "ResourceRedirector" => pick("Перенаправление ресурсов", "Resource redirector"),
+        "Http" => pick("HTTP", "HTTP"),
+        "TranslationAggregator" => pick("Агрегатор переводов", "Translation aggregator"),
+        "Debug" => pick("Отладка", "Debug"),
+        "Migrations" => pick("Миграции", "Migrations"),
+        "Custom" => pick("Свои настройки", "Custom"),
+        "Baidu" => pick("Baidu", "Baidu"),
+        "BingLegitimate" => pick("Bing", "Bing"),
+        "DeepL" => pick("DeepL", "DeepL"),
+        "DeepLLegitimate" => pick("DeepL", "DeepL"),
+        "ezTrans" => pick("ezTrans", "ezTrans"),
+        "Google" => pick("Google", "Google"),
+        "GoogleV2" => pick("Google V2", "Google V2"),
+        "GoogleLegitimate" => pick("Google", "Google"),
+        "LecPowerTranslator15" => pick("LEC Power Translator", "LEC Power Translator"),
+        "LingoCloud" => pick("LingoCloud", "LingoCloud"),
+        "Watson" => pick("Watson", "Watson"),
+        "Yandex" => pick("Яндекс", "Yandex"),
+        _ => return section.to_string(),
+    };
+    label.to_string()
+}
+
+/// Русские описания параметров из комментариев известных конфигов.
+fn note_label(note: &str) -> &str {
+    let ru = match note {
+        // BepInEx
+        "Enable/disable assembly metadata cache" => {
+            "Включает или отключает кэш метаданных сборок"
+        }
+        "Enabling this will speed up discovery of plugins and patchers by caching the metadata of all types BepInEx discovers." => {
+            "Ускоряет поиск плагинов и патчеров: метаданные всех найденных типов кэшируются."
+        }
+        "If enabled, hides BepInEx Manager GameObject from Unity." => {
+            "Скрывает объект BepInEx Manager от Unity."
+        }
+        "This can fix loading issues in some games that attempt to prevent BepInEx from being loaded." => {
+            "Помогает, если игра мешает загрузке BepInEx."
+        }
+        "Use this only if you know what this option means, as it can affect functionality of some older plugins." => {
+            "Включайте, только если понимаете последствия: это может нарушить работу старых плагинов."
+        }
+        "Specifies which Harmony log channels to listen to." => {
+            "Какие каналы логов Harmony слушать."
+        }
+        "NOTE: IL channel dumps the whole patch methods, use only when needed!" => {
+            "Канал IL выводит целые методы патчей — включайте только при необходимости!"
+        }
+        "Multiple values can be set at the same time by separating them with , (e.g. Debug, Warning)" => {
+            "Можно указать несколько значений через запятую, например Debug, Warning."
+        }
+        "Enables showing unity log messages in the BepInEx logging system." => {
+            "Показывает сообщения лога Unity в журнале BepInEx."
+        }
+        "If enabled, writes Standard Output messages to Unity log" => {
+            "Записывает сообщения стандартного вывода в лог Unity."
+        }
+        "NOTE: By default, Unity does so automatically. Only use this option if no console messages are visible in Unity log" => {
+            "Обычно Unity делает это сама. Включайте, только если сообщений консоли нет в логе Unity."
+        }
+        "Enables showing a console for log output." => "Показывает консоль с логами.",
+        "If enabled, will prevent closing the console (either by deleting the close button or in other platform-specific way)." => {
+            "Запрещает закрывать консоль."
+        }
+        "If true, console is set to the Shift-JIS encoding, otherwise UTF-8 encoding." => {
+            "Кодировка консоли: Shift-JIS вместо UTF-8."
+        }
+        "Hints console manager on what handle to assign as StandardOut. Possible values:" => {
+            "Какой поток назначать стандартным выводом. Варианты:"
+        }
+        "Auto - lets BepInEx decide how to redirect console output" => {
+            "Auto — BepInEx сам выбирает способ перенаправления вывода."
+        }
+        "ConsoleOut - prefer redirecting to console output; if possible, closes original standard output" => {
+            "ConsoleOut — вывод в консоль; исходный стандартный вывод закрывается, если возможно."
+        }
+        "StandardOut - prefer redirecting to standard output; if possible, closes console out" => {
+            "StandardOut — вывод в стандартный поток; консоль закрывается, если возможно."
+        }
+        "Which log levels to show in the console output." => {
+            "Какие уровни логов показывать в консоли."
+        }
+        "Include unity log messages in log file output." => {
+            "Добавлять сообщения лога Unity в файл журнала."
+        }
+        "Appends to the log file instead of overwriting, on game startup." => {
+            "Дописывать журнал при запуске игры, а не перезаписывать."
+        }
+        "Enables writing log messages to disk." => "Записывать журнал на диск.",
+        "Which log leves are saved to the disk log output." => {
+            "Какие уровни логов сохранять в файл."
+        }
+        "Enables or disables runtime patches." => {
+            "Включает или отключает патчи во время выполнения."
+        }
+        "This should always be true, unless you cannot start the game due to a Harmony related issue (such as running .NET Standard runtime) or you know what you're doing." => {
+            "Обычно должно быть включено. Отключайте только при сбоях Harmony или если понимаете последствия."
+        }
+        "Specifies which MonoMod backend to use for Harmony patches. Auto uses the best available backend." => {
+            "Бэкенд MonoMod для патчей Harmony. Auto выбирает лучший доступный."
+        }
+        "This setting should only be used for development purposes (e.g. debugging in dnSpy). Other code might override this setting." => {
+            "Только для разработки и отладки в dnSpy: другие плагины могут переопределить значение."
+        }
+        "If enabled, BepInEx will save patched assemblies into BepInEx/DumpedAssemblies." => {
+            "Сохраняет пропатченные сборки в BepInEx/DumpedAssemblies."
+        }
+        "This can be used by developers to inspect and debug preloader patchers." => {
+            "Нужно разработчикам для проверки и отладки патчеров прелоадера."
+        }
+        "If enabled, BepInEx will load patched assemblies from BepInEx/DumpedAssemblies instead of memory." => {
+            "Загружает пропатченные сборки из BepInEx/DumpedAssemblies вместо памяти."
+        }
+        "This can be used to be able to load patched assemblies into debuggers like dnSpy." => {
+            "Позволяет открывать пропатченные сборки в отладчиках вроде dnSpy."
+        }
+        "If set to true, will override DumpAssemblies." => {
+            "При включении переопределяет DumpAssemblies."
+        }
+        "If enabled, BepInEx will call Debugger.Break() once before loading patched assemblies." => {
+            "Вызывает Debugger.Break() перед загрузкой пропатченных сборок."
+        }
+        "This can be used with debuggers like dnSpy to install breakpoints into patched assemblies before they are loaded." => {
+            "Позволяет ставить точки останова в dnSpy до загрузки сборок."
+        }
+        "The local filename of the assembly to target." => "Имя целевой сборки.",
+        "The name of the type in the entrypoint assembly to search for the entrypoint method." => {
+            "Имя типа в сборке точки входа, где ищется метод входа."
+        }
+        "The name of the method in the specified entrypoint assembly and type to hook and load Chainloader from." => {
+            "Имя метода, с которого загружается Chainloader."
+        }
+        // Resource Unload Optimizations
+        "Disables all resource unloading. Requires large amounts of RAM or will likely crash your game. NOT RECOMMENDED FOR NORMAL USE" => {
+            "Полностью отключает выгрузку ресурсов. Требует много ОЗУ, иначе игра, скорее всего, упадёт. Не рекомендуется для обычной игры."
+        }
+        "Use more memory (if available) in order to load the game faster and reduce random stutter." => {
+            "Использовать больше памяти для ускорения загрузки и уменьшения рывков."
+        }
+        "Minimum amount of memory to be used before resource unloading will run." => {
+            "Минимальный объём используемой памяти до запуска выгрузки ресурсов."
+        }
+        // Configuration Manager
+        "The shortcut used to toggle the config manager window on and off." => {
+            "Горячая клавиша для открытия и закрытия менеджера конфигурации."
+        }
+        "The key can be overridden by a game-specific plugin if necessary, in that case this setting is ignored." => {
+            "Плагин игры может переопределить клавишу — тогда эта настройка игнорируется."
+        }
+        "Show section title for plugins with only one section" => {
+            "Показывать заголовок раздела у плагинов с одним разделом."
+        }
+        "If set to true plugins will be collapsed when opening the configuration manager window" => {
+            "Сворачивать плагины при открытии менеджера конфигурации."
+        }
+        _ => return note,
+    };
+    if is_ru() {
+        ru
+    } else {
+        note
+    }
 }
 
 fn setting_row(ui: &mut egui::Ui, p: &Palette, setting: &mut Setting) {
@@ -619,7 +1100,7 @@ fn setting_row(ui: &mut egui::Ui, p: &Palette, setting: &mut Setting) {
     }
     for note in &setting.notes {
         ui.add_space(1.0);
-        ui.label(RichText::new(note).size(10.5).color(p.muted));
+        ui.label(RichText::new(note_label(note)).size(10.5).color(p.muted));
     }
 }
 
@@ -817,5 +1298,15 @@ Name = test
         // Значение через `=` осталось бы с пробелами, как в BepInEx.
         lines[0] = format!("{head}{}", format_color(&[0.5, 0.0, 0.0, 1.0], 4));
         assert_eq!(lines[0], "UIColor:0.5,0,0,1");
+    }
+
+    #[test]
+    fn known_notes_are_translated() {
+        crate::i18n::set(crate::i18n::Lang::Ru);
+        assert_eq!(
+            note_label("Enables showing a console for log output."),
+            "Показывает консоль с логами."
+        );
+        assert_eq!(note_label("Some plugin note"), "Some plugin note");
     }
 }

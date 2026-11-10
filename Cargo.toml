@@ -1,6 +1,6 @@
 [package]
 name = "YanLan"
-version = "2.1.5"
+version = "2.2.1"
 edition = "2021"
 description = "Неофициальный лаунчер Yandere Simulator: отдельные сборки, моды и архив версий"
 authors = ["Archangel192028"]

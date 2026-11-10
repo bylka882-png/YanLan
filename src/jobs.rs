@@ -350,6 +350,21 @@ fn download_catalog(
     Ok(dest)
 }
 
+/// Скачивает архив мода в `downloads/`, не устанавливая его.
+pub fn download_catalog_mod(c: Ctx2, cfg: Config, variant: ModVariant) -> Progress {
+    let progress = Progress::new();
+    let p = progress.clone();
+    spawn(c, progress, move |c, p| {
+        cfg.ensure_dirs();
+        download_catalog(c, &cfg, &variant, p)?;
+        Ok(fill(
+            &pick("«{name}» скачан", "“{name}” downloaded"),
+            &[("name", &variant.name)],
+        ))
+    });
+    p
+}
+
 /// Устанавливает моды из каталога в выбранную сборку.
 ///
 /// Список уже упорядочен: зависимости идут раньше основного мода.

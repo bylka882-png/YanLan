@@ -347,7 +347,12 @@ impl App {
                     ),
                     &[("name", &name)],
                 );
-                self.confirm = Some((message, ConfirmAction::UninstallMod { key, name, game_id }));
+                let action = ConfirmAction::UninstallMod { key, name, game_id };
+                if self.cfg.confirm_delete {
+                    self.confirm = Some((message, action));
+                } else {
+                    self.perform_confirm(action);
+                }
             }
             InstalledAction::GoBuilds => {
                 self.tab = Tab::Builds;

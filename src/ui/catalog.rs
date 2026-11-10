@@ -315,6 +315,7 @@ impl App {
             CatalogAction::Details(id) => {
                 self.catalog_selected = Some(id.clone());
                 self.catalog_shot = 0;
+                self.catalog_info = false;
                 self.catalog_variant = self
                     .catalog
                     .iter()
@@ -530,6 +531,7 @@ impl App {
             .catalog_variant
             .min(group.variants.len().saturating_sub(1));
         let mut shot = self.catalog_shot;
+        let mut show_info = self.catalog_info;
         let mut shots = variant_shots(&group, variant_index);
         if shot >= shots.len() {
             shot = 0;
@@ -602,7 +604,7 @@ impl App {
 
                 egui::ScrollArea::vertical()
                     .id_salt("catalog_details_scroll")
-                    .max_height(432.0)
+                    .max_height(520.0)
                     .auto_shrink([false, true])
                     .show(ui, |ui| {
                         // Большой скриншот и миниатюры.
@@ -687,7 +689,29 @@ impl App {
                         ui.add_space(12.0);
                         let variant = &group.variants[variant_index];
                         let description = variant.description_text();
-                        if !description.is_empty() {
+                        ui.horizontal(|ui| {
+                            let label = if show_info {
+                                pick("Показать описание", "Show description")
+                            } else {
+                                pick("Показать info.yaml", "Show info.yaml")
+                            };
+                            if w::soft(ui, label, &p, true).clicked() {
+                                show_info = !show_info;
+                            }
+                        });
+                        ui.add_space(6.0);
+                        if show_info {
+                            let text = if variant.manifest_text.trim().is_empty() {
+                                pick(
+                                    "info.yaml ещё не загружен — обновите каталог модов.",
+                                    "info.yaml is not loaded yet — refresh the mod catalog.",
+                                )
+                            } else {
+                                variant.manifest_text.trim()
+                            };
+                            ui.label(RichText::new(text).monospace().size(11.0).color(p.text));
+                            ui.add_space(10.0);
+                        } else if !description.is_empty() {
                             ui.label(RichText::new(description).size(12.5).color(p.text));
                             ui.add_space(10.0);
                         }
@@ -876,6 +900,7 @@ impl App {
 
         self.catalog_variant = variant_index;
         self.catalog_shot = shot;
+        self.catalog_info = show_info;
         self.spawn_cover_requests(requests);
         if let Some(action) = action {
             self.handle_catalog_action(action);
@@ -893,6 +918,7 @@ impl App {
         let game = self.current_game().cloned();
         let mut confirm = false;
         let mut cancel = false;
+        let mut download: Option<ModVariant> = None;
 
         let frame = modal_frame(&p, self.cfg.light_theme);
         egui::Window::new("catalog_pending_dialog")
@@ -945,10 +971,7 @@ impl App {
                 if !pending.deps.is_empty() {
                     ui.label(
                         RichText::new(fill(
-                            &pick(
-                                "Будут скачаны зависимости ({count}):",
-                                "Dependencies to download ({count}):",
-                            ),
+                            &pick("Зависимости ({count}):", "Dependencies ({count}):"),
                             &[("count", &pending.deps.len().to_string())],
                         ))
                         .size(12.0)
@@ -960,11 +983,22 @@ impl App {
                         if !dep.version.is_empty() {
                             line.push_str(&format!("  ·  {}", dep.version));
                         }
-                        ui.label(
-                            RichText::new(format!("•  {line}"))
-                                .size(11.5)
-                                .color(p.muted),
-                        );
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(format!("•  {line}"))
+                                    .size(11.5)
+                                    .color(p.muted),
+                            );
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if w::soft(ui, pick("Скачать", "Download"), &p, true).clicked()
+                                    {
+                                        download = Some(dep.clone());
+                                    }
+                                },
+                            );
+                        });
                     }
                     ui.add_space(8.0);
                 }
@@ -1019,8 +1053,15 @@ impl App {
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
                     let enabled = game.is_some() && !pending.variant.soon;
-                    if w::primary(ui, pick("Установить", "Install"), &p, enabled).clicked()
-                    {
+                    let label = if pending.deps.is_empty() {
+                        pick("Установить", "Install")
+                    } else {
+                        pick(
+                            "Установить мод и все зависимости",
+                            "Install the mod and all dependencies",
+                        )
+                    };
+                    if w::primary(ui, label, &p, enabled).clicked() {
                         confirm = true;
                     }
                     if w::soft(ui, pick("Отмена", "Cancel"), &p, true).clicked() {
@@ -1040,6 +1081,21 @@ impl App {
                     });
                 });
             });
+
+        if let Some(dep) = download {
+            let c = jobs::Ctx2 {
+                ctx: self.ctx.clone(),
+                tx: self.tx.clone(),
+            };
+            let progress = jobs::download_catalog_mod(c, self.cfg.clone(), dep.clone());
+            self.start_parallel_job(
+                fill(
+                    &pick("Скачивание {name}", "Downloading {name}"),
+                    &[("name", &dep.name)],
+                ),
+                progress,
+            );
+        }
 
         if confirm {
             if let Some(game) = game {
@@ -1303,6 +1359,39 @@ fn catalog_card(
         .truncate(),
     );
 
+    if group.is_build() {
+        let included = best
+            .ioa
+            .iter()
+            .map(|entry| {
+                let (id, version) = mods::dep_spec(entry);
+                if version.is_empty() {
+                    id
+                } else {
+                    format!("{id} {version}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        if !included.is_empty() {
+            ui.add(
+                egui::Label::new(
+                    RichText::new(fill(
+                        &pick(
+                            "В этой сборке установлены: {list}",
+                            "Included in this build: {list}",
+                        ),
+                        &[("list", &included)],
+                    ))
+                    .size(10.0)
+                    .color(p.accent_dim),
+                )
+                .truncate(),
+            )
+            .on_hover_text(included);
+        }
+    }
+
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 5.0;
         for ty in group.type_list().into_iter().take(3) {
@@ -1518,7 +1607,7 @@ fn paint_thumb(
     }
 }
 
-/// Картинка из репозитория (иконка) — растягивается на всю область.
+/// Картинка из репозитория (иконка), когда обложки нет: крупная по центру.
 fn paint_image(
     ui: &egui::Ui,
     rect: Rect,
@@ -1537,18 +1626,22 @@ fn paint_image(
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, COVER_ROUNDING, p.card_hover);
     if let Some(cover) = texture {
-        paint_cover(ui, &painter, rect, cover);
+        let side = (rect.height() * 0.55)
+            .min(rect.width() * 0.55)
+            .clamp(56.0, 140.0);
+        let area = Rect::from_center_size(rect.center(), Vec2::splat(side));
+        paint_cover(ui, &painter, area, cover);
     }
 }
 
-/// Иконка мода в левом нижнем углу обложки с обводкой цвета фона карточки.
+/// Иконка мода в левом нижнем углу обложки — крупная, без рамки и отступа.
 fn paint_icon_badge(
     ui: &egui::Ui,
     cover: Rect,
     path: &str,
     covers: &HashMap<String, CoverAnim>,
     failed: &HashSet<String>,
-    p: &Palette,
+    _p: &Palette,
     requests: &mut Vec<(String, String)>,
 ) {
     let key = mods::cover_key(path);
@@ -1559,16 +1652,15 @@ fn paint_icon_badge(
     let Some(icon) = texture else {
         return;
     };
-    let side = (cover.height() * 0.30)
-        .clamp(26.0, 64.0)
-        .min(cover.width() * 0.5);
-    let outer = Rect::from_min_size(
-        egui::pos2(cover.left() + 8.0, cover.bottom() - side - 8.0),
+    let side = (cover.height() * 0.34)
+        .clamp(40.0, 104.0)
+        .min(cover.width() * 0.42);
+    let badge = Rect::from_min_size(
+        egui::pos2(cover.left(), cover.bottom() - side),
         Vec2::splat(side),
     );
     let painter = ui.painter_at(cover);
-    painter.rect_filled(outer.expand(2.0), 9.0, p.card);
-    paint_cover(ui, &painter, outer, icon);
+    paint_cover(ui, &painter, badge, icon);
 }
 
 /// Рисует текущий кадр обложки и просит перерисовку к следующему кадру.

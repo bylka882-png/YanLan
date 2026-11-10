@@ -5,6 +5,34 @@
 Формат основан на [Keep a Changelog](https://keepachangelog.com/ru/1.0.0/),
 проект придерживается [Semantic Versioning](https://semver.org/lang/ru/).
 
+## [2.2.1]
+
+### Fixed
+- В редакторе конфигов переведены не только названия параметров, но и описания: комментарии BepInEx, Configuration Manager и Resource Unload Optimizations.
+- Строка «В этой сборке установлены: …» перенесена с карточки вкладки «Сборки» в карточку сборки каталога YanMod. Данные берутся из `ioa` выбранного варианта.
+- Карточка сборки снова 118 px: `ioa` больше не увеличивает её высоту.
+
+### Changed
+- `CHANGELOG.md`: восстановлена история после `1.6.0` — версии `1.7.0`–`2.1.5`.
+- `README.md` переписан под текущие возможности.
+
+### Tests
+- `cargo fmt --all` и `cargo test`: 39 passed, 1 ignored.
+
+## [2.2.0]
+
+### Added
+- Редактор конфигов: переключение между визуальным и текстовым режимами, поиск по параметрам, сохранение комментариев и порядка строк.
+- Русские подписи параметров BepInEx, Configuration Manager и Pose-редактора.
+- Просмотр исходного `info.yaml` в окне мода.
+- Кнопки установки зависимостей и установка мода сразу со всеми зависимостями; список зависимостей в окне мода.
+- `ioa`: состав готовой сборки.
+- Настройка «Спрашивать подтверждение перед удалением» для модов.
+- Иконка мода `ico.webp` в левом нижнем углу обложки.
+
+### Changed
+- Окно мода подстраивается по высоте под содержимое и больше не оставляет пустую область.
+
 ## [2.1.5]
 
 ### Removed
@@ -206,16 +234,18 @@
 
 ---
 
-[2.1.5]: https://github.com/your-org/yanlan/compare/v2.1.0...v2.1.5
-[2.1.0]: https://github.com/your-org/yanlan/compare/v2.0.0...v2.1.0
-[2.0.0]: https://github.com/your-org/yanlan/compare/v1.9.0...v2.0.0
-[1.9.0]: https://github.com/your-org/yanlan/compare/v1.8.0...v1.9.0
-[1.8.0]: https://github.com/your-org/yanlan/compare/v1.7.0...v1.8.0
-[1.7.0]: https://github.com/your-org/yanlan/compare/v1.6.0...v1.7.0
-[1.6.0]: https://github.com/your-org/yanlan/compare/v1.5.0...v1.6.0
-[1.5.0]: https://github.com/your-org/yanlan/compare/v1.4.0...v1.5.0
-[1.4.0]: https://github.com/your-org/yanlan/compare/v1.3.0...v1.4.0
-[1.3.0]: https://github.com/your-org/yanlan/compare/v1.2.0...v1.3.0
-[1.2.0]: https://github.com/your-org/yanlan/compare/v1.1.0...v1.2.0
-[1.1.0]: https://github.com/your-org/yanlan/compare/v1.0.0...v1.1.0
-[1.0.0]: https://github.com/your-org/yanlan/releases/tag/v1.0.0
+[2.2.1]: https://github.com/bylka882-png/YanLan/compare/v2.2.0...v2.2.1
+[2.2.0]: https://github.com/bylka882-png/YanLan/compare/v2.1.5...v2.2.0
+[2.1.5]: https://github.com/bylka882-png/YanLan/compare/v2.1.0...v2.1.5
+[2.1.0]: https://github.com/bylka882-png/YanLan/compare/v2.0.0...v2.1.0
+[2.0.0]: https://github.com/bylka882-png/YanLan/compare/v1.9.0...v2.0.0
+[1.9.0]: https://github.com/bylka882-png/YanLan/compare/v1.8.0...v1.9.0
+[1.8.0]: https://github.com/bylka882-png/YanLan/compare/v1.7.0...v1.8.0
+[1.7.0]: https://github.com/bylka882-png/YanLan/compare/v1.6.0...v1.7.0
+[1.6.0]: https://github.com/bylka882-png/YanLan/compare/v1.5.0...v1.6.0
+[1.5.0]: https://github.com/bylka882-png/YanLan/compare/v1.4.0...v1.5.0
+[1.4.0]: https://github.com/bylka882-png/YanLan/compare/v1.3.0...v1.4.0
+[1.3.0]: https://github.com/bylka882-png/YanLan/compare/v1.2.0...v1.3.0
+[1.2.0]: https://github.com/bylka882-png/YanLan/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/bylka882-png/YanLan/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/bylka882-png/YanLan/releases/tag/v1.0.0

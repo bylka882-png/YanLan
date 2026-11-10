@@ -26,7 +26,7 @@ pub const BRANCH: &str = "main";
 pub const CACHE_TTL: i64 = 6 * 3600;
 /// Версия формата кэша. Старый кэш без `types`/`cfg`/`icon` приходится
 /// сбрасывать: иначе моды годами остаются в неправильных категориях.
-const CACHE_VERSION: u32 = 3;
+const CACHE_VERSION: u32 = 4;
 
 /// Тип мода из манифеста.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
@@ -221,6 +221,9 @@ pub struct ModVariant {
     pub dependencies: Vec<String>,
     /// Путь к `info.yaml` относительно корня репозитория.
     pub manifest_path: String,
+    /// Исходный текст `info.yaml` — показывается вместо описания по кнопке.
+    #[serde(default)]
+    pub manifest_text: String,
     /// Папка мода относительно корня репозитория.
     pub folder: String,
     /// Скриншоты `.webp`/`.gif` из папки мода (отсортированы по имени).
@@ -824,11 +827,11 @@ where
 fn fetch_manifests(
     manifests: &[String],
     progress: &Progress,
-) -> Result<Vec<(String, RawManifest)>, String> {
+) -> Result<Vec<(String, RawManifest, String)>, String> {
     let count = manifests.len();
     let next = AtomicUsize::new(0);
     let done = AtomicUsize::new(0);
-    let results: Mutex<Vec<Option<Result<(String, RawManifest), String>>>> =
+    let results: Mutex<Vec<Option<Result<(String, RawManifest, String), String>>>> =
         Mutex::new((0..count).map(|_| None).collect());
 
     std::thread::scope(|scope| {
@@ -841,10 +844,11 @@ fn fetch_manifests(
                 }
                 let path = &manifests[index];
                 let result = net::get_text(&raw_url(path)).and_then(|text| {
-                    let text = sanitize_cfg_backslashes(crate::util::strip_bom(&text));
+                    let original = crate::util::strip_bom(&text).to_string();
                     let raw: RawManifest =
-                        serde_yaml::from_str(&text).map_err(|e| format!("{path}: {e}"))?;
-                    Ok((path.clone(), raw))
+                        serde_yaml::from_str(&sanitize_cfg_backslashes(&original))
+                            .map_err(|e| format!("{path}: {e}"))?;
+                    Ok((path.clone(), raw, original))
                 });
                 if let Ok(mut guard) = results.lock() {
                     guard[index] = Some(result);
@@ -874,7 +878,7 @@ fn fetch_manifests(
     Ok(loaded)
 }
 
-fn group_variants(files: &[String], loaded: Vec<(String, RawManifest)>) -> Vec<ModGroup> {
+fn group_variants(files: &[String], loaded: Vec<(String, RawManifest, String)>) -> Vec<ModGroup> {
     let mut shots: HashMap<String, Vec<String>> = HashMap::new();
     let mut icons: HashMap<String, String> = HashMap::new();
     for file in files {
@@ -909,7 +913,7 @@ fn group_variants(files: &[String], loaded: Vec<(String, RawManifest)>) -> Vec<M
     let mut groups: Vec<ModGroup> = Vec::new();
     let mut index_by_id: HashMap<String, usize> = HashMap::new();
 
-    for (path, raw) in loaded {
+    for (path, raw, manifest_text) in loaded {
         let folder = path.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
         let mut types = ModType::parse_all(&raw.ty);
         if types.is_empty() {
@@ -952,6 +956,7 @@ fn group_variants(files: &[String], loaded: Vec<(String, RawManifest)>) -> Vec<M
             dependencies: raw.dependencies,
             folder: folder.to_string(),
             manifest_path: path,
+            manifest_text,
             screenshots,
             soon: raw.dl_url.trim().is_empty(),
         };
@@ -1458,6 +1463,7 @@ mod tests {
             dependencies: Vec::new(),
             folder: String::new(),
             manifest_path: String::new(),
+            manifest_text: String::new(),
             screenshots: Vec::new(),
             soon: false,
         };

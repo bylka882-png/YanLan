@@ -148,6 +148,8 @@ pub struct App {
     pub catalog_selected: Option<String>,
     pub catalog_variant: usize,
     pub catalog_shot: usize,
+    /// Показывать в карточке мода `info.yaml` вместо описания.
+    pub catalog_info: bool,
     pub catalog_pending: Option<CatalogPending>,
     /// Мод типа `Build`, для которого вводится название новой сборки.
     pub catalog_build: Option<ModVariant>,
@@ -241,6 +243,7 @@ impl App {
             catalog_selected: None,
             catalog_variant: 0,
             catalog_shot: 0,
+            catalog_info: false,
             catalog_pending: None,
             catalog_build: None,
             catalog_build_name: String::new(),
@@ -1179,7 +1182,7 @@ impl App {
         }
     }
 
-    fn perform_confirm(&mut self, action: ConfirmAction) {
+    pub(crate) fn perform_confirm(&mut self, action: ConfirmAction) {
         let c = jobs::Ctx2 {
             ctx: self.ctx.clone(),
             tx: self.tx.clone(),
