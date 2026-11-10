@@ -1,0 +1,1561 @@
+================================================================================
+YANLAN LAUNCHER
+STANDARD OPERATING PROCEDURE AND ENGINEERING REFERENCE
+================================================================================
+
+Document ID:            SOP-YL-001
+Revision:               1.0
+Date:                   2026-11-07
+Product:                YanLan (Cargo package name: YanLan)
+Product version:        2.0.0 (declared in Cargo.toml; compiled into the binary)
+Platform:               Windows 10 / Windows 11, x64
+Owner:                  Archangel192028
+License:                Creative Commons Attribution-NonCommercial 4.0
+Status:                 Active
+
+--------------------------------------------------------------------------------
+1. PURPOSE
+--------------------------------------------------------------------------------
+
+This document defines how the YanLan launcher is structured, built, operated,
+tested, and maintained. It is the single reference for engineers who modify the
+codebase and for support personnel who diagnose user-reported problems.
+
+The document has three objectives:
+
+1. Describe the product and its operating environment.
+2. Specify the internal architecture and every functional subsystem.
+3. Define the procedures required to build, verify, release, and troubleshoot
+   the application without introducing data loss for end users.
+
+This document does not modify the product license and does not replace the
+end-user README.
+
+--------------------------------------------------------------------------------
+2. SCOPE AND AUDIENCE
+--------------------------------------------------------------------------------
+
+In scope:
+- The YanLan desktop application and all Rust modules in src/.
+- Persistent data written by the launcher (configuration, library, caches).
+- Installation, rollback, catalog, configuration-editor, and player behavior.
+- Build, test, and release procedures for the Windows target.
+
+Out of scope:
+- The Yandere Simulator game itself and its assets.
+- The YanMod catalog repository content (byla882-png/YanMod).
+- Third-party runtimes (WebView2, graphics drivers).
+- Future modules explicitly deferred by the project owner: a mod manager, a
+  download manager, and a log/crash analyzer.
+
+Audience:
+- Maintainers performing code changes or releases.
+- QA personnel executing the manual test matrix.
+- Support personnel diagnosing installation or launch failures.
+- Users who need a precise description of where data is stored.
+
+--------------------------------------------------------------------------------
+3. DEFINITIONS AND ABBREVIATIONS
+--------------------------------------------------------------------------------
+
+Build (game build)
+    An independent copy of Yandere Simulator stored under <root>/games/<name>.
+    Builds do not share files and can be launched independently.
+
+Root directory
+    The launcher data directory. Default: %LOCALAPPDATA%\YanLan.
+    Configurable in Settings and stored in %APPDATA%\YanLan\config.json.
+
+Catalog
+    The remote list of available game versions (archive.org and the official
+    site) or community mods (YanMod repository).
+
+Manifest
+    An info.yaml file inside the YanMod repository that describes one mod
+    variant.
+
+Variant
+    One concrete version of a mod, compiled for a specific game version.
+    Several variants that share an id are grouped into one catalog card.
+
+Compatibility
+    The evaluated relationship between a variant's gameV value and the selected
+    build: compatible, incompatible, or unknown.
+
+Cover
+    A screenshot or preview image from the mod repository, including animated
+    GIF files.
+
+Staging directory
+    A temporary extraction directory. Builds use <root>/games/.staging-<name>;
+    mods use <build>/.yanlan/tmp.
+
+Backup set
+    The directory <build>/.yanlan/backups/<mod key> that stores the original
+    copies of files replaced by an installed mod.
+
+Work directory
+    The hidden directory <build>/.yanlan used for staging, backups, and internal
+    state. It is excluded from empty-directory cleanup.
+
+Job
+    A unit of background work executed on a worker thread and reported through
+    the event channel.
+
+Progress
+    A thread-safe structure carrying stage text, detail text, byte counts, file
+    counts, cancellation flag, and elapsed time.
+
+Toast
+    A transient notification rendered in the bottom-right corner of the window.
+
+--------------------------------------------------------------------------------
+4. PRODUCT OVERVIEW
+--------------------------------------------------------------------------------
+
+4.1 Summary
+
+YanLan is an unofficial desktop launcher for Yandere Simulator. It maintains
+multiple isolated game builds, installs community mods into a selected build
+with automatic backups and rollback, browses the YanMod catalog, and edits the
+INI-style configuration files used by BepInEx and AutoTranslator.
+
+The application is a single native Windows executable built with Rust, eframe,
+and egui. It has no installer and no external DLL dependencies. An embedded
+WebView2 child window is used only for YouTube playback.
+
+4.2 Functional capabilities
+
+- Game build management
+  - Catalog of public game versions from 2014 to 2026.
+  - Creation of an independent build from any listed version.
+  - Renaming, sorting, launching, opening the folder, and deleting builds.
+  - Per-build command-line arguments.
+  - Automatic selection of a Pose mod launcher when one is present.
+
+- Mod installation
+  - ZIP, RAR, and 7z extraction using pure Rust libraries.
+  - Installation into a specific build with file-level backups.
+  - Complete rollback on uninstall for both replaced and added files.
+  - Local archive installation from disk.
+  - Catalog installation with dependency resolution and conflict warnings.
+
+- Mod catalog (YanMod)
+  - Search, category filters, and sorting by name or compatibility.
+  - Multiple variants per mod, automatically matched to the selected build.
+  - Screenshots and animated GIF previews.
+  - Embedded YouTube player for videos referenced in descriptions.
+  - Six-hour cache with a versioned schema.
+
+- Configuration editor
+  - Opens the cfg file declared by the mod manifest.
+  - Detects booleans, enumerated values, and free-form text.
+  - Renders BepInEx notes, defaults, and acceptable values.
+  - Preserves comments, blank lines, key spelling, and line order.
+
+- General
+  - Russian and English interface.
+  - Dark and light themes, including native window chrome on Windows.
+  - Download resume, optional infinite retry, progress reporting, activity log.
+  - HTTP and SOCKS5 proxy support.
+
+4.3 Non-goals
+
+- The launcher does not modify or redistribute game assets.
+- The launcher does not provide automatic self-update.
+- The launcher does not sandbox or antivirus-scan downloaded archives.
+- The launcher does not manage save files.
+- The launcher does not upload telemetry or analytics.
+
+--------------------------------------------------------------------------------
+5. SYSTEM REQUIREMENTS
+--------------------------------------------------------------------------------
+
+5.1 Runtime
+
+- Windows 10 or Windows 11, x64.
+- WebView2 Runtime for embedded YouTube playback. It is preinstalled on
+  current Windows versions; if missing, the launcher falls back to opening the
+  video in the default browser.
+- A writable root directory. The default is %LOCALAPPDATA%\YanLan.
+- Approximately 10 GB of free disk space per full game build, plus space for
+  archives if archive retention is enabled.
+
+5.2 Build environment
+
+- Rust 1.85 or newer with the MSVC toolchain.
+- Visual Studio Build Tools with the Windows SDK (linker and resource compiler).
+- Cargo and rustc available on PATH.
+- The winresource build dependency requires the Windows resource toolchain.
+- Internet access for the first dependency download.
+
+5.3 Network requirements
+
+Outbound HTTPS to:
+- yanderesimulator.com (official latest build).
+- archive.org (historical build metadata and files).
+- raw.githubusercontent.com (manifests and screenshots).
+- api.github.com (repository file listing).
+- data.jsdelivr.com (fallback file listing).
+- i.ytimg.com (video thumbnails).
+- www.youtube.com (embedded player).
+
+A user-configured HTTP or SOCKS5 proxy is applied to all HTTP requests made by
+the launcher through the shared ureq agent. The embedded player uses the system
+network stack and is not routed through the launcher proxy setting.
+
+--------------------------------------------------------------------------------
+6. REPOSITORY LAYOUT
+--------------------------------------------------------------------------------
+
+C:\Users\RAGE\Downloads\yanlan\
+├─ Cargo.toml                 Package metadata and dependencies
+├─ Cargo.lock                 Locked dependency graph
+├─ build.rs                   Windows icon and version resource generation
+├─ build_release.bat          Convenience script for a release build
+├─ README.md                  End-user overview
+├─ CHANGELOG.md               Release history
+├─ LICENSE.md                 License text
+├─ cargo.exe                  Local Cargo binary used by the project owner
+├─ assets/
+│  ├─ icon.ico                Windows executable icon
+│  ├─ icon.png                Runtime window icon (embedded)
+│  └─ loading.gif             Animated loading indicator (embedded)
+└─ src/
+   ├─ main.rs                 Entry point and module declarations
+   ├─ app.rs                  Application state, layout, dialogs, events
+   ├─ builds.rs               Game version catalog and Unity mapping
+   ├─ cfg_edit.rs             Mod configuration editor (parser and UI)
+   ├─ config.rs               Launcher configuration persistence
+   ├─ i18n.rs                 Russian/English string selection
+   ├─ installer.rs            Archive extraction and mod backup/rollback
+   ├─ jobs.rs                 Background jobs and event protocol
+   ├─ library.rs              Installed builds, library.json, executable lookup
+   ├─ loading.rs              Animated loading indicator
+   ├─ mods.rs                 YanMod catalog, manifests, compatibility
+   ├─ net.rs                  HTTP client, downloads, resume, proxy
+   ├─ player.rs               Embedded WebView2 YouTube player
+   ├─ progress.rs             Shared progress and cancellation state
+   ├─ runner.rs               Game process launch and shell actions
+   ├─ theme.rs                Palettes, fonts, egui styling, window chrome
+   ├─ util.rs                 Formatting, path safety, filesystem helpers
+   └─ ui/
+      ├─ mod.rs               UI module re-exports
+      ├─ builds_view.rs       "Builds" tab
+      ├─ catalog.rs           "Catalog" tab and detail dialogs
+      ├─ installed.rs         "Installed" tab
+      ├─ settings.rs          "Settings" tab
+      └─ widgets.rs           Reusable custom widgets
+
+All source files contain a module-level doc comment describing their purpose.
+Public behavior is documented at the function level.
+
+--------------------------------------------------------------------------------
+7. ARCHITECTURE
+--------------------------------------------------------------------------------
+
+7.1 Design principles
+
+- Single process, immediate-mode UI. The application is one executable with no
+  service component and no background daemon.
+- Strict separation between UI and work. Filesystem and network operations run
+  on worker threads; the UI thread never blocks on I/O.
+- Flat module structure. Each module owns one domain and communicates through
+  small public types rather than deep abstractions.
+- Tolerant persistence. Every deserialized structure uses serde defaults so a
+  partially written or older JSON file does not prevent startup.
+- Defensive filesystem access. All archive paths are validated before use.
+
+7.2 Component map
+
+main.rs
+  Creates the native window, installs the icon, and starts eframe.
+
+app.rs
+  Owns all UI state, the event channel, job bookkeeping, global dialogs, and the
+  frame pipeline. It is the integration point for the other modules.
+
+ui/*
+  Stateless rendering helpers implemented as methods on App. They read App
+  state and return user intentions through local enums such as CatalogAction
+  and InstalledAction.
+
+jobs.rs
+  Defines the event enum, spawns worker threads, contains the end-to-end work
+  flows (fetch catalog, install mod, install build, uninstall, delete).
+
+net.rs
+  Shared HTTP agent, text/JSON/byte retrieval, resumable downloads, proxy.
+
+installer.rs
+  Archive format detection, extraction, root detection, mod installation,
+  backup creation, rollback, and empty-directory pruning.
+
+library.rs
+  Build scanning and metadata, executable selection, installed-mod records.
+
+builds.rs / mods.rs
+  Remote catalogs, parsing, normalization, deduplication, caching.
+
+cfg_edit.rs
+  INI parsing and the configuration editor modal.
+
+player.rs
+  WebView2 child-window lifecycle and bounds synchronization.
+
+theme.rs / i18n.rs / util.rs / progress.rs / runner.rs / loading.rs
+  Cross-cutting services.
+
+7.3 Startup sequence
+
+1. main() builds the viewport: 1200x800 logical pixels, minimum 980x640,
+   title "YanLan - Yandere Simulator", icon from assets/icon.png.
+2. eframe creates the native window and calls App::new.
+3. App::new performs the following in order:
+   a. Loads %APPDATA%\YanLan\config.json (missing or corrupt data yields
+      defaults).
+   b. Sets the global interface language.
+   c. Creates the root, games, downloads, and cache directories.
+   d. Applies the selected palette, fonts, and egui style.
+   e. Initializes the HTTP proxy from configuration.
+   f. Creates the mpsc channel used by all worker threads.
+   g. Decodes assets/loading.gif into textures.
+   h. Loads library.json and scans games/.
+   i. Loads the build cache and the mod catalog cache.
+   j. Writes the launcher-folder line to the activity log.
+   k. Refreshes the build catalog if its cache is older than 12 hours.
+   l. Refreshes the mod catalog if its cache is older than 6 hours.
+   m. Performs both refreshes only when auto-refresh is enabled.
+4. The first frame renders the Builds tab. Catalog loading also starts lazily
+   when the Catalog tab is opened for the first time.
+
+7.4 Frame pipeline
+
+Every frame executes the following sequence in App::update:
+
+1. Store the current egui context.
+2. Drain all pending events from the channel (App::pump).
+3. Process keyboard shortcuts:
+   - Ctrl+N opens the Create Build dialog.
+   - Escape closes the topmost dialog in this priority:
+     Create Build, Rename, Launch Options, Mod Settings, Catalog overlays.
+4. Start catalog loading if the Catalog tab is visible and has never loaded.
+5. Request a 100 ms repaint while a job or catalog load is active.
+6. Synchronize theme changes and native window chrome.
+7. Render the left sidebar (fixed 232 px).
+8. Render the bottom status bar (74 px idle, 102 px while a job is active).
+9. Render the top bar (86 px).
+10. Render the central panel for the active tab.
+11. Render overlays in this order: toasts, confirmation dialog, modal dimmer,
+    create dialog, rename dialog, launch-options dialog, catalog details,
+    dependency confirmation, build-type mod dialog, mod settings, player.
+
+7.5 Application state
+
+App is the only long-lived state holder. Principal groups:
+
+- Configuration and presentation: cfg, p (palette), chrome_light, loading.
+- Build data: builds, builds_loaded/loading/error/fetched_at, games,
+  selected_game, builds_sort from configuration.
+- Catalog data: catalog, catalog_loaded/loading/error/fetched_at, query,
+  section filter, sort mode, cover maps, detail selection, variant index,
+  screenshot index.
+- Job state: progress, progress_id, job_title, speed sampling.
+- Dialogs: show_create, rename, launch_opts, confirm, catalog_pending,
+  catalog_build, mod_cfg, player_id.
+- Logging: log (maximum 400 lines) and toasts (maximum 5 visible).
+
+Selection invariants:
+- If the selected game disappears, the first available game is selected.
+- If a catalog filter refers to a build that no longer exists, it is cleared.
+- Variant and screenshot indices are clamped before use.
+
+7.6 Background jobs and event protocol
+
+All long operations run through jobs::spawn or jobs::spawn_data.
+
+Event type (jobs::Ev):
+- Builds { builds, fetched_at, error }
+- Catalog { mods, fetched_at, error }
+- Cover { key, result<Cover, String> }
+- JobDone { id, ok, message }
+- DataDone { ok, message }
+- Log(String)
+
+Ctx2 bundles the egui context and the sender. Ctx2::emit sends an event and
+immediately requests a repaint, so the UI updates without polling delays.
+
+Notify::Job is used for user-initiated operations: completion produces a toast
+and releases the status bar. Notify::Data is used for background refreshes:
+completion does not interrupt an installation in progress.
+
+Progress carries a monotonically increasing id. The UI stores progress_id and
+clears the status bar only for a matching JobDone event, which prevents a
+background task from erasing the progress of a foreground installation.
+
+Job bodies are wrapped in catch_unwind so a panic becomes an error message
+instead of a silent thread failure. Note: the release profile sets
+panic = "abort", which disables unwinding and therefore also disables this
+guard in release builds. The guard is effective in debug and test profiles.
+
+Cancellation is cooperative. Progress::cancel sets an atomic flag; download,
+extraction, and installation loops poll it. There is no forced thread
+termination.
+
+7.7 UI composition
+
+- Sidebar: logo, four navigation items, and version/source labels pinned to the
+  bottom.
+- Top bar: tab title, subtitle, active-build selector, and Play button.
+- Status bar: prompt or job stage, detail line, progress bar, speed, elapsed
+  time, cancellation button.
+- Central panel: active tab content.
+- Overlays: egui windows with Order::Foreground and a dimming layer.
+
+Custom widgets in ui/widgets.rs provide a consistent visual language: primary,
+soft, and danger buttons; icon buttons; close button; animated toggle; manually
+drawn gear; chips; text inputs; section titles; tags; progress bars; dividers;
+hyperlinks; key-value rows.
+
+7.8 Error and notification model
+
+- Recoverable errors are returned as Result<T, String> from modules and jobs.
+- User-facing failures produce a red toast and a log line prefixed "Error:".
+- Successful user operations produce a green toast.
+- Background refresh failures are logged and shown as inline error states, but
+  do not create toasts unless the user explicitly requested the refresh.
+- Diagnostic detail is trimmed before display; full messages are not persisted
+  to disk.
+
+--------------------------------------------------------------------------------
+8. SUBSYSTEM SPECIFICATION
+--------------------------------------------------------------------------------
+
+8.1 Networking (src/net.rs)
+
+HTTP client:
+- ureq agent with a launcher user agent string.
+- Connect timeout 30 s; read and write timeouts 90 s.
+- Optional HTTP or SOCKS5 proxy, configured once at startup and on apply.
+
+Functions:
+- get_json<T>: JSON retrieval with typed deserialization.
+- get_text: plain text retrieval for manifests and index.yaml.
+- get_text_opt: like get_text, but HTTP 404 returns None.
+- get_bytes: full response in memory, used for screenshots.
+- download: resumable file download with retry policy.
+
+Download behavior:
+- Data is written to <destination>.part and renamed on success.
+- If a partial file exists, a Range request resumes it.
+- HTTP 416 with an existing partial file is treated as "already complete".
+- If the server ignores the range request (status 200), the partial file is
+  discarded and the download restarts.
+- Retry attempts use incremental delays capped at 6 s (finite mode) or 15 s
+  (infinite mode).
+- Infinite mode is enabled by the retry_forever setting; cancellation is
+  checked during both transfer and delay.
+- An incomplete transfer is treated as an error and retried.
+
+Error reporting distinguishes HTTP status codes (403, 404, 429) from transport
+failures and includes a short response excerpt.
+
+8.2 Build catalog (src/builds.rs)
+
+Sources:
+- The official latest build: https://yanderesimulator.com/dl/latest.zip.
+- Six archive.org items covering 2026, 2025, 2024, 2023, 2014-2022, and a
+  miscellaneous collection.
+
+Retrieval:
+- Each archive.org item is queried through its metadata endpoint.
+- Items are fetched in parallel with scoped threads.
+- Only files with extensions zip, rar, 7z, or car and non-zero size are kept.
+- Metadata sidecars (_meta.*, *_files.xml) are ignored.
+
+Name parsing:
+- Month-name forms: "October 17th 2026".
+- Underscore form: ys_YYYY_MM_DD with optional version suffix.
+- ISO-like form: YYYY-MM-DD with optional version suffix.
+- Variants are extracted as vN or b.
+- Files that do not match a date become special builds with an mtime and the
+  identifier special-<normalized stem>.
+
+Normalization:
+- Duplicate ids are resolved by the priority order of the source list; earlier
+  sources win.
+- The final list is sorted by date descending; undated entries come last and
+  are sorted by label.
+- Unity generation is derived from the build date with fixed transition
+  boundaries: Unity 4, Unity 5, Unity 2017, Unity 2019, Unity 2020, Unity 6.
+
+Caching:
+- File: <root>/cache/builds.json.
+- Structure: { fetched_at, builds: [Build] }.
+- Considered stale after 12 hours.
+- Legacy localized notes are discarded when loading an old cache.
+
+8.3 Mod catalog (src/mods.rs)
+
+Repository: bylka882-png/YanMod, branch main.
+
+File listing fallback chain:
+1. index.yaml, if present and parseable. Supported forms are a plain sequence,
+   or a mapping with files, manifests, screenshots, and mods entries. mods
+   entries may be strings or objects with manifest and screenshots fields.
+2. GitHub Tree API. The response is rejected if GitHub reports truncation.
+3. jsDelivr flat package listing.
+
+Manifest retrieval:
+- Every path ending in /info.yaml is downloaded.
+- Work is distributed across up to six scoped worker threads.
+- Results preserve the original order; parse errors are collected.
+- At least one successfully parsed manifest is required.
+
+Screenshot association:
+- Files with .webp or .gif in the same directory as info.yaml belong to that
+  mod variant.
+- Names are ordered with a natural comparison, so 2 precedes 10.
+
+Grouping:
+- Variants are grouped by manifest id.
+- Missing ids are derived from folder names; version-like folder names are
+  skipped in favor of the parent folder.
+- Missing versions are inferred from version-like folder names.
+- Group category is the first parsed category; the union of all variant
+  categories is stored in types.
+- Variants are sorted by numeric version parts descending.
+- Group name falls back to the first non-empty variant name, then to the id.
+
+Manifest normalization:
+- Text fields accept strings, numbers, and booleans; values are trimmed.
+- List fields accept sequences, scalars, null, and empty strings.
+- Double-quoted cfg values containing Windows backslashes are sanitized before
+  YAML parsing: single backslashes are doubled so that sequences such as \c do
+  not break the entire document.
+- A missing download URL marks the variant as "soon".
+
+8.4 Manifest schema
+
+Field        Type        Meaning
+id           string      Stable mod identifier; shared by all variants
+name         string      Display name
+by           string      Author
+credits      string      Links and acknowledgements; YouTube links allowed
+v            string      Variant version (numbers accepted)
+gameV        string      Compatibility expression
+description  string      "RU|EN"; the active language is selected at runtime
+DL_url       string      Archive URL; empty means unavailable
+ty           string      Category or composite category list
+cfg          string      Config path relative to the build folder
+affected     list        Files replaced by the mod
+dependencies list        Mod ids that must be installed first
+
+Category parsing accepts semicolon, comma, pipe, and slash separators.
+Recognized aliases:
+- mod, patch -> Mod
+- pm, posemod, pose-mod, pose -> Pose mod
+- tr, texture, textures -> Textures
+- ml, loader -> Loader
+- build, builds -> Build
+- plugin, plugins -> Plugin
+- translate, translation, translations -> Translation
+
+If ty is empty, the category is derived from the first path segment; unknown
+folders become Mod.
+
+8.5 Compatibility engine
+
+Input: the variant's gameV string and the selected build (version and date).
+
+Evaluation order:
+1. Empty value or "own" -> Unknown.
+2. Optional >= or <= prefix.
+3. Unity range, for example U5-U6 -> compare the build's Unity rank.
+4. Single Unity code, for example U19 -> compare Unity rank.
+5. Date period, for example 2017.10.04-2019.07.01 -> inclusive range.
+6. Exact or partial date, for example 2019.07 or 2019.07.01 -> prefix or exact
+   match against the build date.
+7. Fallback: numeric version comparison against the build version.
+
+Unity rank is derived from the executable's file/product version when
+available, otherwise from the build date. An unknown build or unparseable
+expression yields Unknown rather than a false negative.
+
+8.6 Installation engine (src/installer.rs)
+
+Archive detection is signature-based, not extension-based:
+- ZIP: "PK\x03\x04" or "PK\x05\x06".
+- RAR: "Rar!".
+- 7z: "7z\xBC\xAF\x27\x1C".
+- Anything else: rejected with a descriptive error.
+
+Extraction:
+- ZIP: the zip crate, deflate/bzip2/zstd features, 512 KiB buffer, total size
+  precomputed for progress.
+- RAR: the unrar crate, sequential header processing, directory entries
+  created explicitly.
+- 7z: the zesven crate with a progress reporter that supports cancellation.
+- Every entry path passes through util::safe_relative. Absolute paths, drive
+  prefixes, root components, and parent-directory components are rejected.
+- Extraction writes into a staging directory, never directly into the game.
+
+Game root detection (install_game):
+- A directory containing yanderesimulator.exe, unityplayer.dll, or
+  YandereSimulator_Data (case-insensitive) is the root.
+- Depth-1 and depth-2 subdirectories are checked.
+- If no marker exists, a single subdirectory with no sibling files is used.
+- The detected root's contents are moved into the target build directory.
+- The staging directory is removed afterwards.
+
+Mod root detection (install_mod):
+- A game-root marker means the archive root is correct.
+- A direct child named BepInEx, YandereSimulator_Data, Mods, or Plugins means
+  the archive root is correct.
+- A single wrapper directory without files is descended into recursively.
+- Otherwise the archive root is used.
+
+Mod installation:
+1. Extract to <build>/.yanlan/tmp.
+2. Collect all files recursively with forward-slash relative paths.
+3. For each file:
+   - If the target exists, copy the original to
+     <build>/.yanlan/backups/<key>/<relative path> and mark replaced=true.
+   - If the target does not exist, mark replaced=false.
+   - Copy the new file into place.
+   - Update progress.
+4. Remove the staging directory.
+5. Return the file list for library.json.
+
+Rollback (uninstall_mod):
+- Files are processed in reverse order.
+- replaced=true: copy the backup over the target.
+- replaced=false: delete the target.
+- The backup set is removed.
+- Empty directories under the build are pruned up to depth 12, excluding
+  .yanlan.
+
+8.7 Library and build scanning (src/library.rs)
+
+Scanning:
+- Every non-hidden directory under <root>/games is a candidate.
+- Metadata is read from .yanlan.json; if absent, a synthetic record is created
+  from the directory name and its modification time.
+- Directories without a runnable executable are skipped.
+- The build size is computed recursively.
+- The mod count is the number of library records for that build id.
+- Results are sorted by build date descending, then installation time.
+
+Executable selection:
+- The preferred game executable is yanderesimulator.exe; otherwise the first
+  .exe in the folder.
+- If any file name contains "pose" and ends in .exe, the Pose launcher is used
+  instead, because the Pose mod must be started through it.
+- When several Pose executables exist, the one matching the game's PE bitness
+  (32 or 64) is preferred; the other bitness is explicitly avoided.
+- PE bitness is read from the MZ/PE headers.
+
+Display names:
+- A user label is used when it is non-empty, differs from the id, and is not a
+  legacy placeholder such as "Build" or "Сборка".
+- Otherwise a name is composed from the version or date.
+- Legacy builds whose label equals the folder id are migrated to a readable
+  label at display time without rewriting the metadata.
+
+Unity label:
+- The executable's file/product version is parsed when it looks like a Unity
+  version (4.x, 5.x, 6.x, or 20xx).
+- Build-specific date overrides handle the 2020-04-10 V2 exception.
+- Otherwise the date-to-generation mapping is used.
+
+8.8 Mod configuration editor (src/cfg_edit.rs)
+
+Entry point:
+- The gear button on an installed-mod row calls open_mod_settings(key).
+- The cfg path is taken from the library record.
+- If the record has no cfg (mods installed before the field existed), the first
+  non-empty cfg among the matching catalog variants is used.
+- The path is resolved relative to the build folder and must exist.
+- If no path is known or the file is missing, a toast explains the problem.
+
+File handling:
+- The file is read as bytes and decoded as UTF-8 with lossy replacement.
+- A UTF-8 BOM is stripped.
+- CRLF is preserved when present; otherwise LF is used.
+- A trailing newline is preserved.
+
+Parsing model:
+- Sections are declared by [Section] lines.
+- Lines starting with # or ; are notes.
+- A key-value line is split at the first "=".
+- An inline comment beginning with " #" is preserved as a trailing suffix.
+- Only key-value lines become settings; blank lines, comments, and section
+  headers keep their original positions.
+
+Metadata interpreted from notes:
+- "Setting type: Boolean" marks a boolean setting.
+- "Default value: X" becomes a default hint.
+- "Acceptable values: A, B, C" becomes a choice list.
+- All remaining notes are displayed as explanatory text.
+
+Control selection:
+- A boolean value or a Boolean setting type renders an animated toggle.
+- A non-empty acceptable-values list renders a drop-down; the current value is
+  inserted if it is not in the list.
+- Everything else renders a single-line text field.
+- The original spelling True/False is preserved when toggled.
+
+Saving:
+- Only the value portion of each key-value line is rewritten.
+- The key text, spacing before "=", inline comment, line order, and line ending
+  are preserved.
+- The file is written back in place.
+- Save closes the dialog and emits a success toast and log entry.
+- Parse or I/O errors are displayed inside the dialog; the window stays open.
+
+UI:
+- Centered modal with title, relative path, search field, grouped settings,
+  notes, defaults, Save, and Cancel.
+- Esc closes without saving.
+- Search matches section, key, value, and notes.
+
+8.9 Embedded YouTube player (src/player.rs)
+
+- The player is a wry WebView2 child window embedded in the launcher window.
+- URL: https://www.youtube.com/embed/<id> with autoplay, rel=0, modestbranding,
+  playsinline, and origin=https://yanlan.local.
+- Referer and Origin headers are set explicitly to https://yanlan.local/ to
+  avoid YouTube error 153 when the embed is hosted outside a browser origin.
+- Bounds are specified in physical pixels and recomputed every frame from the
+  egui rectangle and the current pixels-per-point value.
+- The video panel is 72 percent of the screen width, clamped to 420-960 logical
+  pixels, with a 16:9 video area.
+- Escape and the close button destroy the child window.
+- If WebView2 fails to initialize, a toast is shown and the video opens in the
+  external browser.
+- YouTube links are removed from the displayed description; video ids are
+  extracted from the raw description and rendered as clickable thumbnails.
+
+8.10 Cover pipeline and GIF animation
+
+- Catalog covers are fetched and decoded on worker threads.
+- A cache file is <root>/cache/covers/<hash>.img, where the hash is a 64-bit
+  FNV-1a of the repository path. The file stores the original image bytes.
+- YouTube thumbnails are cached under the key yt-<video id>.
+- Decoding:
+  - GIF: every frame is decoded; per-frame delays are taken from the GIF and
+    clamped to 0.02-1.0 s. Frames are composited by the decoder into full
+    images.
+  - PNG/JPEG/WebP: a single frame with zero delay.
+- Each frame becomes an egui texture. CoverAnim stores the textures, delays,
+  and total duration.
+- CoverAnim::frame(time) selects the frame for the current time and returns the
+  remaining time before the next frame.
+- paint_cover requests a repaint after that remaining interval, producing
+  animation without a busy loop.
+- Failed downloads are added to a failure set so the launcher does not retry a
+  broken image every frame. A corrupt cache file is deleted on failure.
+- Cover painting uses a center-crop scale that fills the target rectangle.
+
+8.11 Theme, fonts, and window chrome
+
+- Two palettes: DARK and LIGHT, both with the same 11 semantic colors.
+- The palette is applied through egui visuals and style overrides.
+- Widget expansion is disabled so hover does not inflate frames.
+- Fonts: Comic Sans MS files from C:\Windows\Fonts are used when available,
+  followed by a symbol font (Segoe UI Symbol) for glyphs missing from Comic
+  Sans. If neither is present, egui's embedded fonts are used.
+- Text styles: h1 28, heading 22, h2 19, body/button 14.5, small 12, tiny 11.
+- On Windows, DwmSetWindowAttribute colors the native title bar to match the
+  theme; attributes 20 and 19 cover current and older Windows 10 builds.
+
+8.12 Localization
+
+- Languages: Russian (default) and English.
+- Strings are supplied inline as pick("Russian", "English") at the call site.
+  There is no external dictionary and no missing-key failure mode.
+- fill(template, args) performs {placeholder} substitution.
+- The active language is stored in a global atomic so worker threads can format
+  their own notifications consistently.
+- The language is loaded from config at startup and changed from Settings.
+
+8.13 Utilities and path safety
+
+- safe_relative normalizes backslashes and accepts only Normal path components.
+  It rejects absolute paths, prefixes, root components, and "..".
+- join_safe combines a base directory with a validated relative path.
+- sanitize_name and sanitize_dir_name remove forbidden characters and reserved
+  Windows names while preserving Cyrillic.
+- strip_bom removes a UTF-8 BOM before deserialization.
+- dir_size, remove_dir_quiet, move_contents, and copy_recursive implement
+  filesystem operations with error reporting.
+- split_args tokenizes a command line while respecting double quotes.
+- format_ts, format_date, human_size, human_speed, and human_eta handle display
+  formatting.
+- open_path and open_url delegate to Explorer or the default browser.
+
+--------------------------------------------------------------------------------
+9. PERSISTENT DATA SPECIFICATION
+--------------------------------------------------------------------------------
+
+9.1 Directory layout
+
+<root>/
+├─ games/
+│  ├─ <build>/
+│  │  ├─ YandereSimulator.exe and game files
+│  │  ├─ .yanlan.json               Build metadata
+│  │  └─ .yanlan/
+│  │     ├─ backups/<mod key>/      Original files replaced by a mod
+│  │     └─ tmp/                    Mod staging directory
+│  └─ .staging-<name>/              Build staging (temporary)
+├─ downloads/                       Retained archives, if enabled
+├─ cache/
+│  ├─ builds.json                   Game catalog cache
+│  ├─ mods.json                     Mod catalog cache
+│  └─ covers/<hash>.img             Screenshot and thumbnail cache
+└─ library.json                     Installed mod records
+
+Launcher configuration is stored separately:
+%APPDATA%\YanLan\config.json
+
+9.2 config.json
+
+JSON object with serde defaults for every field:
+
+root_dir        string   Root data directory; empty means the default
+keep_archives   bool     Keep downloaded archives after installation
+confirm_delete  bool     Ask before deleting builds and mods
+light_theme     bool     Use the light palette
+auto_refresh    bool     Refresh catalogs automatically when stale
+builds_sort     enum     "version" | "size" | "name"
+lang            enum     "ru" | "en"
+retry_forever   bool     Retry interrupted downloads indefinitely
+proxy           string   "" or http://host:port or socks5://host:port
+
+Defaults: root_dir=%LOCALAPPDATA%\YanLan, keep_archives=false,
+confirm_delete=true, light_theme=false, auto_refresh=true,
+builds_sort=version, lang=ru, retry_forever=true, proxy="".
+
+The file is written as pretty-printed JSON on every settings change.
+
+9.3 library.json
+
+{
+  "mods": [
+    {
+      "key": "ConMam-1793809723-0",
+      "mod_id": "ConMam",
+      "name": "Configuration Manager",
+      "category": "Mod",
+      "author": "ManlyMarco",
+      "game_id": "O101726",
+      "installed_at": 1793809723,
+      "files": [
+        { "path": "BepInEx/plugins/ConfigurationManager.dll", "replaced": false }
+      ],
+      "cfg": "BepInEx\\config\\com.bepis.bepinex.configurationmanager.cfg"
+    }
+  ]
+}
+
+Key rules:
+- key is unique: sanitized mod id, installation timestamp, and queue index for
+  catalog batches. This prevents two mods installed in the same second from
+  overwriting each other's backups.
+- category is a ModType code: Mod, PM, TR, ML, Build, Plugin, Translate.
+- path is always relative to the build root and uses forward slashes.
+- replaced=true means a backup exists and must be restored on removal.
+- cfg is optional for backward compatibility; empty means "use the catalog".
+
+9.4 .yanlan.json
+
+{
+  "id": "O101726",
+  "label": "Main",
+  "version": "2026.10.17",
+  "date": "2026-10-17",
+  "source": "archive.org - 2026",
+  "installed_at": 1793809000,
+  "args": ""
+}
+
+- id equals the directory name and is treated as stable.
+- label is the user-facing name and can be changed independently.
+- version stores the catalog label of the source build.
+- args holds additional command-line arguments for the game executable.
+
+9.5 Cache files
+
+builds.json:
+  { "fetched_at": <unix>, "builds": [Build, ...] }
+  Stale after 12 hours.
+
+mods.json:
+  { "version": 2, "fetched_at": <unix>, "mods": [ModGroup, ...] }
+  Stale after 6 hours.
+  A cache with a different version value is deleted and ignored, which forces a
+  clean rebuild of categories and cfg fields after schema changes.
+
+Cover files:
+  Raw downloaded image bytes. The file name is the 16-hex-digit FNV-1a hash of
+  the source path. YouTube thumbnails use yt-<id>.img.
+
+9.6 INI write rules (mod configuration editor)
+
+- A setting is identified by its line index in the original file.
+- On save, the line is rebuilt as:
+  <key text> "=" <space> <new value> <original inline comment>
+- The key text includes the original spacing before "=" only up to the "=".
+- Blank lines, comments, section headers, and untouched settings are written
+  exactly as read.
+- The original newline style and final-newline presence are restored.
+
+--------------------------------------------------------------------------------
+10. OPERATING PROCEDURES
+--------------------------------------------------------------------------------
+
+10.1 First run
+
+1. Start YanLan.exe.
+2. The launcher creates <root> and its subdirectories.
+3. If no configuration exists, defaults are used and the root is
+   %LOCALAPPDATA%\YanLan.
+4. The build catalog is downloaded unless a fresh cache exists.
+5. The Builds tab shows an empty state with a "Create build" action.
+
+10.2 Create a game build
+
+1. Open the Builds tab.
+2. Select "Create build" or press Ctrl+N.
+3. Enter a unique name. The name is sanitized into a directory name and must
+   not collide with an existing build.
+4. Choose a game version from the picker. The picker supports search and shows
+   date, size, source, and Unity generation.
+5. Confirm. The archive downloads with resume support, extracts to a staging
+   directory, the game root is detected, and files are moved into
+   games/<name>.
+6. .yanlan.json is written and the build appears in the list.
+7. The archive is deleted unless keep_archives is enabled.
+
+Verification: the card must show the name, version, size, source, Unity label,
+and mod count. Pressing Play must start the executable with the configured
+arguments and the build folder as the working directory.
+
+10.3 Install a mod from the catalog
+
+1. Select the target build in the top bar.
+2. Open the Catalog tab and choose a category or search for a mod.
+3. Open the mod card.
+4. Select the required variant. The best compatible variant is preselected.
+5. Press Install.
+6. If the variant declares dependencies, a confirmation dialog lists the mods
+   that will also be downloaded, missing dependencies, and file conflicts with
+   already installed mods.
+7. Confirm. Dependencies install first, then the selected mod.
+8. Each installed mod receives a library record with file list and cfg path.
+
+Rules:
+- A mod with type Build is installed as a separate game build after the user
+  supplies a build name.
+- A mod whose DL_url is empty is shown as unavailable and cannot be installed.
+- A dependency is skipped if it is already installed for the same build.
+- Missing dependencies are reported but do not necessarily block installation;
+  the user decides after reviewing the warning.
+
+10.4 Install a local archive
+
+1. Open the Installed tab and select a build.
+2. Press "Install from file".
+3. Choose a zip, rar, or 7z archive.
+4. The archive is installed as a mod named after the file stem; the category
+   is Mod and no author is recorded.
+
+10.5 Uninstall a mod
+
+1. Open the Installed tab.
+2. Press Delete on the mod row and confirm.
+3. The record is removed from memory.
+4. Files are processed in reverse order: backups are restored and added files
+   are deleted.
+5. The backup set is removed, empty directories are pruned, and library.json is
+   saved.
+
+If rollback fails, library.json is not saved, so the record remains available
+for a retry.
+
+10.6 Delete a build
+
+1. Press Delete on a build card and confirm.
+2. All library records for the build are removed.
+3. The build directory is deleted recursively.
+
+Warning: build deletion is irreversible and also removes the build's backup
+sets. The launcher asks for confirmation when confirm_delete is enabled.
+
+10.7 Edit a mod configuration
+
+1. Open the Installed tab.
+2. Press the gear button on the mod row.
+3. If the manifest declares cfg and the file exists, the editor opens.
+4. Adjust toggles, choices, or text values. Notes and defaults are read-only.
+5. Press Save to write the file, or Cancel/Esc to discard.
+
+Operational notes:
+- The game should be closed while editing, otherwise it may overwrite the file
+  on exit or the plugin may rewrite it at startup.
+- Comments and ordering are preserved, so manual edits outside the launcher
+  remain intact.
+
+10.8 Manage root directory, proxy, and caches
+
+Root directory:
+1. Settings > Storage.
+2. Enter or browse to a new path.
+3. Apply. The path must exist or be creatable.
+4. The library is reloaded from the new root.
+
+Proxy:
+1. Settings > Network.
+2. Choose HTTP or SOCKS5.
+3. Enter host:port, with optional credentials.
+4. Enable "Use a proxy" and apply.
+5. Clearing the field and disabling the proxy restores direct connections.
+
+Caches:
+- Settings > Build catalog > Clear cache removes catalog and cover caches.
+- The build catalog is refreshed with the refresh button; the mod catalog is
+  refreshed from the Catalog tab.
+
+10.9 Change language or theme
+
+- Settings > Interface language switches between Russian and English
+  immediately; the choice is persisted.
+- Settings > Behaviour > Light theme switches the palette and native window
+  chrome immediately; the choice is persisted.
+
+--------------------------------------------------------------------------------
+11. BUILD AND RELEASE
+--------------------------------------------------------------------------------
+
+11.1 Standard build commands
+
+Debug build:
+  cargo build
+
+Release build:
+  cargo build --release
+
+Formatting:
+  cargo fmt
+
+Static checks:
+  cargo check
+
+Tests:
+  cargo test
+
+The project also contains build_release.bat, which changes to the project
+directory, runs cargo build --release, and pauses. It is a convenience wrapper,
+not a required step.
+
+11.2 build.rs
+
+- Runs only on Windows.
+- If assets/icon.ico exists, it embeds the icon and sets ProductName "YanLan",
+  FileDescription, and LegalCopyright in the executable resources.
+- Declares a rebuild dependency on assets/icon.ico.
+- Resource failures are ignored so a missing resource compiler does not break
+  the build.
+
+11.3 Release profile
+
+Cargo.toml defines:
+- opt-level = 3
+- lto = "fat"
+- codegen-units = 1
+- strip = true
+- panic = "abort"
+
+Consequences:
+- The binary is optimized and stripped.
+- Panics in release builds abort the process and cannot be caught by
+  catch_unwind. Background-job panic containment therefore applies only to
+  debug and test profiles.
+- Because symbols are stripped, release crash diagnostics are limited.
+
+11.4 Pre-release verification checklist
+
+Mandatory:
+[ ] cargo fmt produces no diff.
+[ ] cargo check completes without warnings introduced by the change.
+[ ] cargo test passes.
+[ ] cargo build --release succeeds.
+[ ] The executable starts on a machine without a pre-existing config.
+[ ] The UI renders in both dark and light themes.
+[ ] Russian and English strings render without missing glyphs.
+[ ] A build can be created, launched, renamed, and deleted.
+[ ] A catalog mod can be installed and fully uninstalled.
+[ ] A local zip, rar, and 7z archive can be installed.
+[ ] Replaced files are restored byte-for-byte after uninstall.
+[ ] The config editor opens, toggles a boolean, and saves without reordering
+    lines or dropping comments.
+[ ] Animated GIF covers advance between frames.
+[ ] The embedded player starts without error 153, or falls back to the browser.
+[ ] Cancelling a download leaves no misleading library record.
+[ ] The activity log and toasts report success and failure consistently.
+
+Data hygiene:
+[ ] Test data in the user's real root directory is restored or removed.
+[ ] No temporary paths, debug prints, or test entries remain in the repository.
+
+11.5 Release artifacts
+
+Expected artifact:
+  target\release\YanLan.exe
+
+Recommended release bundle:
+  YanLan.exe, README.md, CHANGELOG.md, LICENSE.md
+
+The executable is portable. It stores configuration in %APPDATA% and data in
+the configured root directory; it does not write to its own directory.
+
+Note: the package name in Cargo.toml determines the executable file name.
+Because the package is currently named "YanLan", the output is YanLan.exe.
+Documentation that still refers to yanlan.exe must be updated when the version
+scheme is finalized.
+
+--------------------------------------------------------------------------------
+12. CODING STANDARDS
+--------------------------------------------------------------------------------
+
+Language and style:
+- Rust 2021 edition.
+- Module-level //! documentation for every file.
+- Public items and non-obvious logic documented with /// comments.
+- Comments explain intent and constraints, not syntax.
+- Russian comments are used in most modules; identifiers and APIs are English.
+
+Error handling:
+- Library and job functions return Result<T, String>.
+- Error strings are user-facing and localized through pick/fill where the
+  message can reach the UI.
+- Background work never panics intentionally; unexpected states are converted
+  to errors.
+- File operations that are non-critical use let _ = to avoid aborting a flow.
+
+Localization:
+- All user-visible strings pass through pick("...", "...").
+- Placeholders use {name} syntax and fill().
+- Dynamic values from the network are inserted after trimming.
+
+Serialization:
+- Every persisted struct derives Serialize and Deserialize.
+- Every optional or newly added field uses #[serde(default)] to preserve
+  backward compatibility.
+- Cache schema changes increment the cache version constant.
+
+Filesystem:
+- Never join an archive-provided path without safe_relative/join_safe.
+- Never delete a directory that is not known to be inside the root or a build.
+- Preserve user files and comments; modify only the intended value.
+
+UI:
+- Do not block the UI thread.
+- Use the existing widget helpers instead of raw egui controls when a match
+  exists.
+- Provide hover text for icon-only actions.
+- Respect the palette; do not hard-code colors outside theme.rs and category
+  color tables.
+
+--------------------------------------------------------------------------------
+13. TESTING
+--------------------------------------------------------------------------------
+
+13.1 Automated tests
+
+Tests are colocated with implementation modules under #[cfg(test)].
+
+Covered areas:
+- Build name parsing: month names, underscore dates, ISO-like dates, variants,
+  and rejection of non-build names.
+- Unity generation mapping at boundary dates.
+- Proxy address parsing, including scheme detection and trimming.
+- Installer: signature detection, nested game-root discovery, ZIP mod install
+  and rollback, 7z extraction.
+- Library: PE bitness reading, Pose launcher selection by bitness, display-name
+  placeholder handling.
+- Catalog: composite category parsing, folder-based category fallback,
+  manifest numeric coercion, empty list handling, cfg backslash sanitization,
+  YouTube link removal, compatibility expressions, index.yaml forms.
+- Configuration editor: BepInEx note interpretation, bool/choice/text
+  selection, True/False spelling preservation.
+- Utilities: path traversal rejection, human-readable sizes, Cyrillic directory
+  names, BOM stripping, date conversion, quoted argument splitting.
+- Localization placeholder substitution.
+
+Execution:
+  cargo test
+
+A nonzero exit code can occur in some consoles even when all tests pass because
+the test harness writes to stderr. The authoritative result is the "test result"
+summary line.
+
+13.2 Manual test matrix
+
+Environment:
+- Windows 10 or 11 with WebView2.
+- A root directory containing at least one real build.
+- A mod with a declared cfg file (for example a BepInEx plugin config).
+
+Cases:
+1. Cold start with no configuration.
+2. Warm start with cached catalogs and an installed library.
+3. Create a build from the official latest source.
+4. Create a build from an archive.org year mirror.
+5. Attempt to create a duplicate build name.
+6. Install a catalog mod without dependencies.
+7. Install a catalog mod with dependencies and a file conflict.
+8. Install a Build-type catalog item as a separate build.
+9. Install a local zip, rar, and 7z archive.
+10. Uninstall each mod and verify restored file contents.
+11. Cancel a download and verify no library entry is created.
+12. Disable auto-refresh and confirm no background requests at startup.
+13. Configure an invalid proxy and confirm a clear network error.
+14. Switch language and theme; restart and confirm persistence.
+15. Open the config editor, change a boolean, save, and diff the file.
+16. Search the config editor; verify grouping and notes.
+17. Open a mod with .gif screenshots and observe animation.
+18. Open a YouTube video from a description.
+19. Resize the window while the player is open.
+20. Delete a build and confirm its directory and mod records are removed.
+
+Result recording:
+- Record the build version, operating system, and root path.
+- Capture the activity log for every failure.
+- Restore any user data modified during testing.
+
+--------------------------------------------------------------------------------
+14. SECURITY AND DATA INTEGRITY
+--------------------------------------------------------------------------------
+
+Threat model:
+- Downloaded archives and catalog manifests are untrusted input.
+- The launcher runs with the user's privileges and does not request elevation.
+- Game executables are launched as normal child processes.
+
+Controls:
+- Archive entry paths are validated; path traversal is rejected.
+- Archive formats are detected by signature, not by extension.
+- Downloads use HTTPS.
+- Extraction occurs in a staging directory before files are moved.
+- Replaced files are backed up before overwrite.
+- Destructive actions require confirmation when enabled.
+- The user is shown dependency and conflict information before installation.
+
+Residual risks and required care:
+- Archives are not scanned for malware. Users must trust the catalog owner and
+  the download host.
+- The proxy string, including credentials, is stored in plaintext in
+  config.json.
+- The embedded WebView2 player executes remote web content. Its security
+  boundary is the system WebView2 runtime.
+- The cfg value from a remote manifest is normalized but not currently checked
+  for parent-directory traversal before joining it to the build path. A
+  hardening change should apply util::safe_relative to this path.
+- The launcher does not verify checksums or signatures of downloaded builds or
+  mods; integrity depends on the transport and the host.
+- Deleting a build removes its backup sets permanently.
+- Cancelling a mod installation can leave already-copied files in the build.
+  Because the library record is written only after all files succeed, the
+  launcher cannot automatically roll back such a partial installation.
+
+Operational rules for support:
+- Never instruct a user to delete .yanlan/backups while mods are installed.
+- Always back up library.json before manual repair.
+- Prefer uninstalling a mod through the launcher so that backups are restored.
+
+--------------------------------------------------------------------------------
+15. KNOWN LIMITATIONS AND TECHNICAL DEBT
+--------------------------------------------------------------------------------
+
+Functional limitations:
+- The catalog accepts .car archives, but the installer cannot extract them;
+  such builds fail with an unknown-format error.
+- Embedded playback requires WebView2; without it, the browser fallback is used.
+- The proxy setting does not apply to the embedded WebView2 player.
+- The launcher does not auto-update itself.
+- Build size calculation traverses the entire build on every library reload,
+  which can be slow for very large builds.
+- There is no per-file progress display during mod uninstall.
+
+Robustness limitations:
+- Release builds use panic=abort, disabling background panic recovery.
+- Mod installation is not transactional; cancellation can leave partial files.
+- Build deletion removes library records before deleting the directory; a
+  failure leaves the files on disk without records.
+- Uninstall ignores individual restore errors in some branches, so a locked
+  file may remain replaced.
+- The cover cache has no size limit or eviction policy.
+- Network errors are shown as strings and are not classified for retry logic.
+
+Documentation debt:
+- Cargo.toml declares version 2.0.0, while README.md still advertises 1.9.5 and
+  CHANGELOG.md ends at 1.6.0.
+- README.md refers to target\release\yanlan.exe, while the current package name
+  produces YanLan.exe.
+- The empty state on the Installed tab still says that the mod catalog is under
+  development, although the catalog is implemented.
+- Some legacy comments describe removed placeholders or future features.
+
+Security hardening backlog:
+- Validate manifest cfg paths with util::safe_relative before use.
+- Optionally verify archive size and checksum when the catalog provides them.
+- Consider storing proxy credentials outside the plaintext configuration.
+
+--------------------------------------------------------------------------------
+16. TROUBLESHOOTING
+--------------------------------------------------------------------------------
+
+Symptom: The build list is empty on first start.
+Cause: Network failure, GitHub rate limiting, or blocked archive.org access.
+Action: Check the activity log; retry later; configure a proxy; verify that
+        HTTPS access to archive.org and yanderesimulator.com works.
+
+Symptom: "HTTP 403" or "HTTP 429" while loading the catalog.
+Cause: GitHub API rate limit or repository access restriction.
+Action: Wait for the limit to reset, use the jsDelivr fallback by retrying, or
+        configure a proxy. Verify that the YanMod repository is public.
+
+Symptom: "No info.yaml files found in the repository."
+Cause: index.yaml is absent or malformed and the GitHub listing failed.
+Action: Confirm that index.yaml exists and uses a supported form; check the
+        tree API response; retry with jsDelivr available.
+
+Symptom: A build appears in the catalog but fails to install.
+Cause: Unsupported archive (for example .car), corrupted download, or a server
+        returning an HTML error page instead of an archive.
+Action: Read the extraction error; delete the partial file in downloads; retry;
+        report the source URL.
+
+Symptom: A build directory exists but does not appear in the launcher.
+Cause: No executable was found, or the directory name starts with a dot.
+Action: Verify that YandereSimulator.exe exists; place the build directly under
+        games/, not inside another wrapper folder.
+
+Symptom: The game does not start.
+Cause: Missing executable, antivirus quarantine, or invalid launch arguments.
+Action: Open the build folder and start the executable manually; clear the
+        launch arguments; check the activity log.
+
+Symptom: The Pose mod does not load.
+Cause: The wrong launcher was started, or both 32-bit and 64-bit Pose
+        executables are present and the bitness could not be determined.
+Action: Confirm the game executable is a valid PE file; remove the mismatched
+        Pose launcher or ensure the correct one matches the game bitness.
+
+Symptom: YouTube shows error 153.
+Cause: Missing or rejected Referer/Origin, or an outdated WebView2 runtime.
+Action: Update WebView2; verify network access to youtube.com; the launcher
+        falls back to the browser only if the player cannot initialize, not if
+        YouTube rejects the request.
+
+Symptom: The config editor reports that the settings file was not found.
+Cause: The manifest cfg path is wrong, the build was moved, or the plugin has
+        not generated its config yet.
+Action: Start the game once so the plugin creates the file; correct cfg in the
+        manifest; verify the path relative to the build folder.
+
+Symptom: A setting changed in the editor has no effect in game.
+Cause: The game was running and overwrote the file, or the plugin rewrites its
+        config on startup.
+Action: Close the game, edit again, then start the game.
+
+Symptom: Uninstall does not restore a file.
+Cause: The backup is missing or the target file is locked.
+Action: Close the game; inspect .yanlan/backups/<key>; restore the file
+        manually from there; do not delete the backup set before verification.
+
+Symptom: Download progress stalls.
+Cause: Server stopped sending data; infinite retry is waiting; network dropped.
+Action: Check the status detail line; cancel and retry; enable or disable
+        infinite retry as appropriate; test the proxy.
+
+Symptom: The window title bar is the wrong color.
+Cause: Windows version does not support the DWM attributes used, or a remote
+        desktop session overrides them.
+Action: This is cosmetic; the in-window theme remains correct.
+
+--------------------------------------------------------------------------------
+17. MAINTENANCE PROCEDURES
+--------------------------------------------------------------------------------
+
+17.1 Add or change a manifest field
+
+1. Add the field to RawManifest with #[serde(default)] and an appropriate
+   deserializer.
+2. Add it to ModVariant (and ModGroup only if it is group-level).
+3. Populate it in group_variants.
+4. Add UI rendering in ui/catalog.rs.
+5. If the field affects cached data, increment mods::CACHE_VERSION.
+6. Add a unit test for parsing and a manual catalog test.
+7. Document the field in README.md and this SOP.
+
+17.2 Add a category
+
+1. Add a variant to ModType.
+2. Update ALL, parse_one, from_folder, code, label, and color.
+3. Update library::kind_label and library::kind_color.
+4. Update catalog filter chips and counts.
+5. Update installed-mod tags and sorting if relevant.
+6. Add parser tests.
+7. Increment the catalog cache version so cached entries are rebuilt.
+
+17.3 Add a UI tab
+
+1. Add a variant to Tab.
+2. Implement title, subtitle, and icon.
+3. Add it to the sidebar list and the reload behavior.
+4. Add the match arm in App::update.
+5. Create src/ui/<name>.rs and register it in src/ui/mod.rs.
+6. Add any new state fields to App and initialize them in App::new.
+7. Add the tab to this document and to README.md.
+
+17.4 Add a language
+
+1. Add a variant to i18n::Lang and update ALL, native, and short.
+2. Extend the global atomic encoding if more than two languages are needed.
+3. Replace is_ru/pick usage only if the two-argument model no longer fits.
+4. Add the language to Settings.
+5. Review every pick() call for a missing translation.
+6. Test long strings for layout overflow.
+
+Note: the current design assumes exactly two languages in pick(ru, en). Adding
+a third language requires a structural change to a key-based dictionary.
+
+17.5 Version bump and release
+
+1. Update version in Cargo.toml.
+2. Run cargo fmt, cargo check, cargo test, cargo build --release.
+3. Update the README badge and the build artifact name.
+4. Add a CHANGELOG entry using Keep a Changelog and SemVer.
+5. Run the release verification checklist.
+6. Attach YanLan.exe, README.md, CHANGELOG.md, and LICENSE.md to the release.
+7. Verify the executable's embedded version and icon.
+
+Current drift to resolve: Cargo.toml 2.0.0, README 1.9.5, CHANGELOG 1.6.0.
+
+17.6 Cache schema changes
+
+1. Increment CACHE_VERSION in mods.rs.
+2. Ensure load_cache deletes an incompatible file.
+3. Verify that a fresh fetch succeeds and that categories and cfg fields are
+   correct.
+4. Record the change in the changelog.
+
+--------------------------------------------------------------------------------
+18. APPENDIX A - EXTERNAL ENDPOINTS
+--------------------------------------------------------------------------------
+
+Purpose                     Endpoint
+Official latest build       https://yanderesimulator.com/dl/latest.zip
+Official download page      https://yanderesimulator.com/download/
+Archive.org metadata        https://archive.org/metadata/<item>
+Archive.org download        https://archive.org/download/<item>/<file>
+Archive.org details page    https://archive.org/details/<item>
+Manifest and screenshots    https://raw.githubusercontent.com/bylka882-png/YanMod/main/<path>
+Repository file tree        https://api.github.com/repos/bylka882-png/YanMod/git/trees/main?recursive=1
+Repository fallback list    https://data.jsdelivr.com/v1/packages/gh/bylka882-png/YanMod@main?structure=flat
+YouTube thumbnail           https://i.ytimg.com/vi/<id>/mqdefault.jpg
+YouTube embed               https://www.youtube.com/embed/<id>
+YouTube watch fallback      https://www.youtube.com/watch?v=<id>
+License reference           https://creativecommons.org/licenses/by-nc/4.0/legalcode
+
+Archive.org item identifiers:
+- yandere-simulator-2026-archive
+- yandere-simulator-2025-archive
+- yandere-simulator-2024-archive
+- yandere-simulator-2023-archive
+- dc778803-73c7-406b-8739-61fdf82294b5 (2014-2022)
+- yandere-simulator-versions (miscellaneous)
+
+--------------------------------------------------------------------------------
+19. APPENDIX B - MANIFEST EXAMPLE
+--------------------------------------------------------------------------------
+
+id: ConMam
+name: Configuration Manager
+by: ManlyMarco
+credits: "https://github.com/ManlyMarco"
+v: "19.1"
+gameV: ">=U17"
+description: "Менеджер настроек BepInEx.|BepInEx settings manager."
+DL_url: "https://github.com/.../ConfigurationManager.zip"
+type: Plugin
+cfg: "BepInEx\\config\\com.bepis.bepinex.configurationmanager.cfg"
+affected_files:
+  - "BepInEx/plugins/ConfigurationManager.dll"
+dependencies:
+  - BepInEx
+
+Notes:
+- The cfg value is sanitized before parsing, so single backslashes are safe.
+- If DL_url is empty, the catalog card is marked as unavailable.
+- type may contain multiple categories separated by semicolons.
+- description is split at the first pipe into Russian and English text.
+
+--------------------------------------------------------------------------------
+20. APPENDIX C - FILE AND DATA MATRIX
+--------------------------------------------------------------------------------
+
+Path                                  Created by      Removed by
+<root>/                               App::new        Manual only
+<root>/games/                         App::new        Manual only
+<root>/games/<build>/                 Install build   Delete build
+<root>/games/<build>/.yanlan.json     Install build   Delete build
+<root>/games/<build>/.yanlan/         Install/uninstall  Delete build
+<root>/games/.staging-<name>/         Build install   After install
+<root>/downloads/                     App::new        Manual or cache clear
+<root>/cache/                         App::new        Clear cache
+<root>/cache/builds.json              Catalog fetch   Clear cache
+<root>/cache/mods.json                Catalog fetch   Clear cache
+<root>/cache/covers/                  Cover fetch     Clear cache
+<root>/library.json                   Mod install     Manual only
+%APPDATA%/YanLan/config.json          Config save     Manual only
+
+Ownership rules:
+- library.json is the authoritative list of installed mods.
+- .yanlan.json is the authoritative metadata for a build.
+- Cache files are disposable and must never be required for correctness.
+- Backup sets are required for rollback and must not be deleted independently.
+
+--------------------------------------------------------------------------------
+21. VERIFICATION RECORD
+--------------------------------------------------------------------------------
+
+Date        Scope                                   Result
+2026-11-07  Installed tab, mod config editor,       Passed. A temporary cfg
+            boolean toggle, save, restore           entry was added to a test
+                                                    library and restored after
+                                                    verification; the edited
+                                                    BepInEx config was restored
+                                                    from backup.
+2026-11-07  Catalog categories, GIF covers,         Passed. Category counts and
+            installed filter chips                  filtered lists matched the
+                                                    cached catalog.
+
+This record documents functional verification only. It does not replace the
+release checklist in section 11.4.
+
+--------------------------------------------------------------------------------
+22. REVISION HISTORY
+--------------------------------------------------------------------------------
+
+Revision  Date        Author              Change
+1.0       2026-11-07  Archangel192028     Initial SOP and engineering
+                                            reference for product version
+                                            2.0.0.
+
+================================================================================
+END OF DOCUMENT
+================================================================================

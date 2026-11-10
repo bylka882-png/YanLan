@@ -1,0 +1,5 @@
+BackgroundImage:
+PointerImage:PoseMod/Pointer.png
+MenuColor:1,.75,1,1
+TextColor:1,1,1,1
+TextShadowColor:0,0,0,.25
