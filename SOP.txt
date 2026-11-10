@@ -4,10 +4,10 @@ STANDARD OPERATING PROCEDURE AND ENGINEERING REFERENCE
 ================================================================================
 
 Document ID:            SOP-YL-001
-Revision:               1.0
-Date:                   2026-11-07
+Revision:               2.0
+Date:                   2026-11-10
 Product:                YanLan (Cargo package name: YanLan)
-Product version:        2.0.0 (declared in Cargo.toml; compiled into the binary)
+Product version:        2.2.1 (declared in Cargo.toml; compiled into the binary)
 Platform:               Windows 10 / Windows 11, x64
 Owner:                  Archangel192028
 License:                Creative Commons Attribution-NonCommercial 4.0
@@ -130,34 +130,51 @@ WebView2 child window is used only for YouTube playback.
   - Catalog of public game versions from 2014 to 2026.
   - Creation of an independent build from any listed version.
   - Renaming, sorting, launching, opening the folder, and deleting builds.
-  - Per-build command-line arguments.
+  - Per-build command-line arguments and optional launch flags.
   - Automatic selection of a Pose mod launcher when one is present.
+  - Unity generation shown in the version picker and Unity version read from
+    the executable.
+  - Multi-volume builds: semicolon-separated parts are downloaded and joined.
 
 - Mod installation
   - ZIP, RAR, and 7z extraction using pure Rust libraries.
+  - 7z through sevenz-rust2, including solid archives and BCJ2, with progress
+    and cancellation.
   - Installation into a specific build with file-level backups.
   - Complete rollback on uninstall for both replaced and added files.
   - Local archive installation from disk.
   - Catalog installation with dependency resolution and conflict warnings.
+  - Multi-volume mods declared as DL_url parts are joined before extraction.
 
 - Mod catalog (YanMod)
   - Search, category filters, and sorting by name or compatibility.
   - Multiple variants per mod, automatically matched to the selected build.
-  - Screenshots and animated GIF previews.
-  - Embedded YouTube player for videos referenced in descriptions.
+  - Installed state: a mod already present in the build shows "Installed".
+  - Screenshots, animated GIF previews, and square ico.webp icons.
+  - Cover priority: screenshot, then first video thumbnail, then icon.
+  - Up to ten embedded YouTube videos per description.
+  - ioa composition for Build entries.
+  - Original info.yaml viewer.
   - Six-hour cache with a versioned schema.
 
 - Configuration editor
   - Opens the cfg file declared by the mod manifest.
-  - Detects booleans, enumerated values, and free-form text.
-  - Renders BepInEx notes, defaults, and acceptable values.
+  - Detects booleans, enumerated values, colors, key bindings, and free-form
+    text.
+  - Key capture: click the value, then press the key.
+  - RGB/RGBA color picker for color values.
+  - Pose Mod config paths for U19, U20, and U6.
+  - Visual and plain-text modes with search.
+  - Russian labels and descriptions for known BepInEx, Configuration Manager,
+    Resource Unload Optimizations, and Pose settings.
   - Preserves comments, blank lines, key spelling, and line order.
 
 - General
-  - Russian and English interface.
+  - Russian and English interface, including the config editor.
   - Dark and light themes, including native window chrome on Windows.
   - Download resume, optional infinite retry, progress reporting, activity log.
   - HTTP and SOCKS5 proxy support.
+  - Optional delete confirmation for builds and mods.
 
 4.3 Non-goals
 
@@ -183,7 +200,8 @@ WebView2 child window is used only for YouTube playback.
 
 5.2 Build environment
 
-- Rust 1.85 or newer with the MSVC toolchain.
+- Rust 1.93 or newer with the MSVC toolchain. The minimum comes from
+  sevenz-rust2, which declares rust-version 1.93.
 - Visual Studio Build Tools with the Windows SDK (linker and resource compiler).
 - Cargo and rustc available on PATH.
 - The winresource build dependency requires the Windows resource toolchain.
@@ -515,6 +533,7 @@ Manifest retrieval:
 Screenshot association:
 - Files with .webp or .gif in the same directory as info.yaml belong to that
   mod variant.
+- ico.webp is stored as the mod icon, not as a screenshot.
 - Names are ordered with a natural comparison, so 2 precedes 10.
 
 Grouping:
@@ -535,6 +554,14 @@ Manifest normalization:
   not break the entire document.
 - A missing download URL marks the variant as "soon".
 
+Download URL handling:
+- DL_url may contain several archive parts separated by semicolons.
+- A part without a directory prefix inherits the prefix of the first part.
+- Parts are downloaded in order and concatenated into one archive before
+  extraction; the joined file follows the keep_archives setting.
+- The selected variant stores its own cfg, icon, and ioa fields, so catalog
+  records do not lose them when the cache is rebuilt.
+
 8.4 Manifest schema
 
 Field        Type        Meaning
@@ -545,9 +572,11 @@ credits      string      Links and acknowledgements; YouTube links allowed
 v            string      Variant version (numbers accepted)
 gameV        string      Compatibility expression
 description  string      "RU|EN"; the active language is selected at runtime
-DL_url       string      Archive URL; empty means unavailable
-ty           string      Category or composite category list
+DL_url       string      Archive URL or semicolon-separated part list; empty
+                         means unavailable
+type         string      Category or composite category list; ty is accepted
 cfg          string      Config path relative to the build folder
+ioa          list        Mods already included in a Build ("id; version")
 affected     list        Files replaced by the mod
 dependencies list        Mod ids that must be installed first
 
@@ -561,7 +590,7 @@ Recognized aliases:
 - plugin, plugins -> Plugin
 - translate, translation, translations -> Translation
 
-If ty is empty, the category is derived from the first path segment; unknown
+If type is empty, the category is derived from the first path segment; unknown
 folders become Mod.
 
 8.5 Compatibility engine
@@ -595,10 +624,18 @@ Extraction:
   precomputed for progress.
 - RAR: the unrar crate, sequential header processing, directory entries
   created explicitly.
-- 7z: the zesven crate with a progress reporter that supports cancellation.
+- 7z: the sevenz-rust2 crate, one sequential pass over the archive, including
+  solid blocks and BCJ2, with byte/file progress and cancellation between
+  chunks. Password-protected archives are not supported.
 - Every entry path passes through util::safe_relative. Absolute paths, drive
   prefixes, root components, and parent-directory components are rejected.
 - Extraction writes into a staging directory, never directly into the game.
+
+Multi-volume archives:
+- Every part is downloaded to <root>/downloads/<stem>.partN.
+- Parts are concatenated in order into a single archive.
+- If keep_archives is disabled, the parts are removed after joining; the joined
+  archive follows the same retention rule as a normal download.
 
 Game root detection (install_game):
 - A directory containing yanderesimulator.exe, unityplayer.dll, or
@@ -671,10 +708,14 @@ Unity label:
 8.8 Mod configuration editor (src/cfg_edit.rs)
 
 Entry point:
-- The gear button on an installed-mod row calls open_mod_settings(key).
-- The cfg path is taken from the library record.
-- If the record has no cfg (mods installed before the field existed), the first
-  non-empty cfg among the matching catalog variants is used.
+- The gear button on an installed-mod row calls open_mod_cfg with the build id,
+  mod id, display name, and cfg path.
+- The cfg path is taken from the library record. If the record has no cfg
+  (mods installed before the field existed), the first non-empty cfg among the
+  matching catalog variants is used.
+- If the manifest path does not exist, known Pose Mod locations are tried:
+  PoseMod/Settings.ini and
+  YandereSimulator_Data/StreamingAssets/PoseMod/Settings.txt.
 - The path is resolved relative to the build folder and must exist.
 - If no path is known or the file is missing, a toast explains the problem.
 
@@ -687,7 +728,8 @@ File handling:
 Parsing model:
 - Sections are declared by [Section] lines.
 - Lines starting with # or ; are notes.
-- A key-value line is split at the first "=".
+- A key-value line is split at the first "=" or ":" so BepInEx (key=value)
+  and Pose Mod (key:value) files share one parser.
 - An inline comment beginning with " #" is preserved as a trailing suffix.
 - Only key-value lines become settings; blank lines, comments, and section
   headers keep their original positions.
@@ -702,30 +744,42 @@ Control selection:
 - A boolean value or a Boolean setting type renders an animated toggle.
 - A non-empty acceptable-values list renders a drop-down; the current value is
   inserted if it is not in the list.
+- A color value (comma-separated floats) renders an RGB/RGBA picker; the number
+  of components is preserved.
+- A key-binding value renders a capture button: click it, then press a key.
+  Escape cancels capture instead of closing the dialog.
 - Everything else renders a single-line text field.
 - The original spelling True/False is preserved when toggled.
+- The plain-text mode shows the whole file for manual editing and writes it
+  back verbatim when Save is pressed.
 
 Saving:
 - Only the value portion of each key-value line is rewritten.
-- The key text, spacing before "=", inline comment, line order, and line ending
-  are preserved.
+- The key text, spacing before "=" or ":", inline comment, line order, and line
+  ending are preserved.
+- In text mode the raw buffer is written verbatim.
 - The file is written back in place.
 - Save closes the dialog and emits a success toast and log entry.
 - Parse or I/O errors are displayed inside the dialog; the window stays open.
 
 UI:
-- Centered modal with title, relative path, search field, grouped settings,
-  notes, defaults, Save, and Cancel.
-- Esc closes without saving.
-- Search matches section, key, value, and notes.
+- Centered modal with title, relative path, visual/plain-text switch, search
+  field, grouped settings, notes, defaults, Save, and Cancel.
+- Esc closes without saving, except while a key is being captured.
+- Search matches section, key, value, and notes in visual mode.
+- Known BepInEx, Configuration Manager, Resource Unload Optimizations, and
+  Pose settings use Russian labels and notes when the interface language is
+  Russian.
 
 8.9 Embedded YouTube player (src/player.rs)
 
 - The player is a wry WebView2 child window embedded in the launcher window.
+- A loopback HTTP server on 127.0.0.1 serves one HTML page containing the
+  YouTube iframe. Because the page has a real http origin, YouTube receives a
+  valid Referer and the embed no longer fails with error 153.
 - URL: https://www.youtube.com/embed/<id> with autoplay, rel=0, modestbranding,
-  playsinline, and origin=https://yanlan.local.
-- Referer and Origin headers are set explicitly to https://yanlan.local/ to
-  avoid YouTube error 153 when the embed is hosted outside a browser origin.
+  and playsinline.
+- The server binds an ephemeral port and is stopped when the player is dropped.
 - Bounds are specified in physical pixels and recomputed every frame from the
   egui rectangle and the current pixels-per-point value.
 - The video panel is 72 percent of the screen width, clamped to 420-960 logical
@@ -737,6 +791,14 @@ UI:
   extracted from the raw description and rendered as clickable thumbnails.
 
 8.10 Cover pipeline and GIF animation
+
+Cover selection priority:
+1. A screenshot named 1.webp, or the first .webp/.gif in natural order.
+2. The thumbnail of the first video in the description.
+3. The square icon ico.webp.
+
+The icon is also drawn in the lower-left corner of the cover with a small
+background-colored outline. Up to ten videos are extracted per description.
 
 - Catalog covers are fetched and decoded on worker threads.
 - A cache file is <root>/cache/covers/<hash>.img, where the hash is a 64-bit
@@ -877,13 +939,16 @@ Key rules:
   "date": "2026-10-17",
   "source": "archive.org - 2026",
   "installed_at": 1793809000,
-  "args": ""
+  "args": "",
+  "ioa": []
 }
 
 - id equals the directory name and is treated as stable.
 - label is the user-facing name and can be changed independently.
 - version stores the catalog label of the source build.
 - args holds additional command-line arguments for the game executable.
+- ioa lists mods already included in the build ("id; version"); such mods are
+  shown in the Installed tab without a delete button.
 
 9.5 Cache files
 
@@ -892,10 +957,10 @@ builds.json:
   Stale after 12 hours.
 
 mods.json:
-  { "version": 2, "fetched_at": <unix>, "mods": [ModGroup, ...] }
+  { "version": 4, "fetched_at": <unix>, "mods": [ModGroup, ...] }
   Stale after 6 hours.
   A cache with a different version value is deleted and ignored, which forces a
-  clean rebuild of categories and cfg fields after schema changes.
+  clean rebuild of categories, cfg, icon, and ioa fields after schema changes.
 
 Cover files:
   Raw downloaded image bytes. The file name is the 16-hex-digit FNV-1a hash of
@@ -998,8 +1063,11 @@ sets. The launcher asks for confirmation when confirm_delete is enabled.
 1. Open the Installed tab.
 2. Press the gear button on the mod row.
 3. If the manifest declares cfg and the file exists, the editor opens.
-4. Adjust toggles, choices, or text values. Notes and defaults are read-only.
-5. Press Save to write the file, or Cancel/Esc to discard.
+4. Adjust toggles, choices, colors, key bindings, or text values. Notes and
+   defaults are read-only.
+5. Use the plain-text switch to edit the whole file, or the search field to
+   filter settings.
+6. Press Save to write the file, or Cancel/Esc to discard.
 
 Operational notes:
 - The game should be closed while editing, otherwise it may overwrite the file
@@ -1121,9 +1189,8 @@ The executable is portable. It stores configuration in %APPDATA% and data in
 the configured root directory; it does not write to its own directory.
 
 Note: the package name in Cargo.toml determines the executable file name.
-Because the package is currently named "YanLan", the output is YanLan.exe.
-Documentation that still refers to yanlan.exe must be updated when the version
-scheme is finalized.
+The package is named "YanLan", so the output is YanLan.exe; README, CHANGELOG,
+and this document use that name.
 
 --------------------------------------------------------------------------------
 12. CODING STANDARDS
@@ -1182,20 +1249,24 @@ Covered areas:
 - Unity generation mapping at boundary dates.
 - Proxy address parsing, including scheme detection and trimming.
 - Installer: signature detection, nested game-root discovery, ZIP mod install
-  and rollback, 7z extraction.
+  and rollback, 7z extraction through sevenz-rust2, solid archives with empty
+  files, and multi-volume joining.
 - Library: PE bitness reading, Pose launcher selection by bitness, display-name
   placeholder handling.
 - Catalog: composite category parsing, folder-based category fallback,
   manifest numeric coercion, empty list handling, cfg backslash sanitization,
-  YouTube link removal, compatibility expressions, index.yaml forms.
-- Configuration editor: BepInEx note interpretation, bool/choice/text
-  selection, True/False spelling preservation.
+  ioa and dependency specs, YouTube link removal, compatibility expressions,
+  index.yaml forms.
+- Configuration editor: BepInEx note interpretation, bool/choice/text/key/color
+  selection, True/False spelling preservation, Pose key:value parsing.
 - Utilities: path traversal rejection, human-readable sizes, Cyrillic directory
   names, BOM stripping, date conversion, quoted argument splitting.
 - Localization placeholder substitution.
 
 Execution:
   cargo test
+
+Current baseline: 40 passed, 1 ignored (2026-11-10, product version 2.2.1).
 
 A nonzero exit code can occur in some consoles even when all tests pass because
 the test harness writes to stderr. The authoritative result is the "test result"
@@ -1282,12 +1353,14 @@ Operational rules for support:
 Functional limitations:
 - The catalog accepts .car archives, but the installer cannot extract them;
   such builds fail with an unknown-format error.
+- Password-protected 7z archives are not supported.
 - Embedded playback requires WebView2; without it, the browser fallback is used.
 - The proxy setting does not apply to the embedded WebView2 player.
 - The launcher does not auto-update itself.
 - Build size calculation traverses the entire build on every library reload,
   which can be slow for very large builds.
 - There is no per-file progress display during mod uninstall.
+- Building requires Rust 1.93+ because of sevenz-rust2.
 
 Robustness limitations:
 - Release builds use panic=abort, disabling background panic recovery.
@@ -1300,13 +1373,9 @@ Robustness limitations:
 - Network errors are shown as strings and are not classified for retry logic.
 
 Documentation debt:
-- Cargo.toml declares version 2.0.0, while README.md still advertises 1.9.5 and
-  CHANGELOG.md ends at 1.6.0.
-- README.md refers to target\release\yanlan.exe, while the current package name
-  produces YanLan.exe.
-- The empty state on the Installed tab still says that the mod catalog is under
-  development, although the catalog is implemented.
 - Some legacy comments describe removed placeholders or future features.
+- The SOP remains English while the user-facing README and CHANGELOG are
+  Russian; keep both in sync when behavior changes.
 
 Security hardening backlog:
 - Validate manifest cfg paths with util::safe_relative before use.
@@ -1354,11 +1423,11 @@ Cause: The wrong launcher was started, or both 32-bit and 64-bit Pose
 Action: Confirm the game executable is a valid PE file; remove the mismatched
         Pose launcher or ensure the correct one matches the game bitness.
 
-Symptom: YouTube shows error 153.
-Cause: Missing or rejected Referer/Origin, or an outdated WebView2 runtime.
-Action: Update WebView2; verify network access to youtube.com; the launcher
-        falls back to the browser only if the player cannot initialize, not if
-        YouTube rejects the request.
+Symptom: YouTube shows error 153 or a black player.
+Cause: The loopback HTTP server could not start, a firewall blocks 127.0.0.1,
+        or WebView2 is outdated.
+Action: Update WebView2; check that the player page opens from 127.0.0.1;
+        allow loopback HTTP connections in the firewall.
 
 Symptom: The config editor reports that the settings file was not found.
 Cause: The manifest cfg path is wrong, the build was moved, or the plugin has
@@ -1443,7 +1512,7 @@ a third language requires a structural change to a key-based dictionary.
 6. Attach YanLan.exe, README.md, CHANGELOG.md, and LICENSE.md to the release.
 7. Verify the executable's embedded version and icon.
 
-Current drift to resolve: Cargo.toml 2.0.0, README 1.9.5, CHANGELOG 1.6.0.
+Current versions: Cargo.toml 2.2.1, README 2.2.1, CHANGELOG 2.2.1.
 
 17.6 Cache schema changes
 
@@ -1501,8 +1570,12 @@ dependencies:
 Notes:
 - The cfg value is sanitized before parsing, so single backslashes are safe.
 - If DL_url is empty, the catalog card is marked as unavailable.
-- type may contain multiple categories separated by semicolons.
+- type may contain multiple categories separated by semicolons; the ty key is
+  accepted as an alias.
 - description is split at the first pipe into Russian and English text.
+- A Build manifest may declare ioa as a list of "id; version" strings; those
+  mods are shown as already installed and cannot be removed from the build.
+- DL_url may list several archive parts separated by semicolons.
 
 --------------------------------------------------------------------------------
 20. APPENDIX C - FILE AND DATA MATRIX
@@ -1534,6 +1607,16 @@ Ownership rules:
 --------------------------------------------------------------------------------
 
 Date        Scope                                   Result
+2026-11-10  Multi-volume 7z (ChristmasParty),      Passed. 2.6 GB archive
+            sevenz-rust2 extraction, progress      extracted in 30.6 s; 1823
+                                                   files / 5.94 GB; result
+                                                   matched manual 7-Zip.
+2026-11-10  Config editor Pose settings, key       Passed. F9 -> capture -> F5
+            capture, RGB colors, text mode         displayed; values and
+                                                   comments preserved.
+2026-11-10  2.2.1 documentation and ioa card       Passed. cargo test 40
+            placement                              passed, 1 ignored; release
+                                                   build succeeds.
 2026-11-07  Installed tab, mod config editor,       Passed. A temporary cfg
             boolean toggle, save, restore           entry was added to a test
                                                     library and restored after
@@ -1552,6 +1635,12 @@ release checklist in section 11.4.
 --------------------------------------------------------------------------------
 
 Revision  Date        Author              Change
+2.0       2026-11-10  Archangel192028     Updated for product version 2.2.1:
+                                            7z via sevenz-rust2, multi-volume
+                                            archives, ioa, installed state,
+                                            config text mode, keys and colors,
+                                            local HTTP YouTube player, cache
+                                            version 4, Rust 1.93+.
 1.0       2026-11-07  Archangel192028     Initial SOP and engineering
                                             reference for product version
                                             2.0.0.

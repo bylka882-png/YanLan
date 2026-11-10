@@ -726,7 +726,7 @@ struct RawManifest {
     description: String,
     #[serde(default, rename = "DL_url", deserialize_with = "de_text")]
     dl_url: String,
-    #[serde(default, deserialize_with = "de_text")]
+    #[serde(default, alias = "type", deserialize_with = "de_text")]
     ty: String,
     #[serde(default, deserialize_with = "de_text")]
     cfg: String,
@@ -1534,6 +1534,14 @@ mod tests {
         .unwrap();
         assert!(structured.contains(&"PM/Bee/1.3/info.yaml".to_string()));
         assert!(structured.contains(&"PM/Bee/1.3/1.webp".to_string()));
+    }
+
+    #[test]
+    fn raw_manifest_accepts_type_alias() {
+        let with_type: RawManifest = serde_yaml::from_str("type: Plugin\n").unwrap();
+        let with_ty: RawManifest = serde_yaml::from_str("ty: Plugin\n").unwrap();
+        assert_eq!(with_type.ty, "Plugin");
+        assert_eq!(with_ty.ty, "Plugin");
     }
 
     #[test]

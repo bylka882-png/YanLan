@@ -59,7 +59,7 @@ YanLan/
 
 ## Сборка
 
-Нужны Rust 1.85+ с toolchain MSVC и WebView2 Runtime (входит в Windows 10/11).
+Нужны Rust 1.93+ с toolchain MSVC и WebView2 Runtime (входит в Windows 10/11).
 
 ```powershell
 cargo build --release
