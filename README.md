@@ -2,8 +2,7 @@
 
 Неофициальный лаунчер Yandere Simulator для Windows: отдельные сборки игры, каталог модов и редактор их конфигов.
 
-[![Built with OpenCode & DeepSeek 4.1 Flash](https://img.shields.io/badge/Built_with-OpenCode_%26_DeepSeek_4.1_Flash-2E2E8B?style=flat)](https://www.deepseek.com)
-[![Version](https://img.shields.io/badge/Version-2.2.5-2E8B57)](CHANGELOG.md) [![License](https://img.shields.io/badge/License-CC%20BY--NC%204.0-B8B800)](LICENSE.md) [![Catalog YanMod](https://img.shields.io/badge/Catalog-YanMod-8A2E4D?style=flat)](https://github.com/bylka882-png/YanMod)
+[![Built with OpenCode & DeepSeek 4.1 Flash](https://img.shields.io/badge/Built_with-OpenCode_%26_DeepSeek_4.1_Flash-2E2E8B?style=flat)](https://www.deepseek.com) [![Latest](https://img.shields.io/github/v/release/bylka882-png/YanLan?sort=semver&color=ffffff&label=Latest)](https://github.com/bylka882-png/YanLan/releases/latest) <br> [![Version](https://img.shields.io/github/v/release/bylka882-png/YanLan?sort=semver&color=2E8B57&label=Version)](CHANGELOG.md) [![License](https://img.shields.io/badge/License-CC%20BY--NC%204.0-B8B800)](LICENSE.md) [![Catalog YanMod](https://img.shields.io/badge/Catalog-YanMod-8A2E4D?style=flat)](https://bylka882-png.github.io/YanLan)
 
 ## Возможности
 
