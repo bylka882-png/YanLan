@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 
 use crate::i18n::{fill, pick};
 use crate::util::{dir_size, now_ts};
@@ -139,7 +140,7 @@ fn read_meta(dir: &Path) -> Option<GameMeta> {
 
 pub fn write_meta(dir: &Path, meta: &GameMeta) -> Result<(), String> {
     let text = serde_json::to_string_pretty(meta).map_err(|e| e.to_string())?;
-    std::fs::write(dir.join(META_FILE), text).map_err(|e| {
+    crate::util::write_atomic(&dir.join(META_FILE), text).map_err(|e| {
         fill(
             &pick(
                 "Не удалось записать метаданные сборки: {err}",
@@ -498,21 +499,52 @@ pub struct Library {
     pub mods: Vec<InstalledMod>,
 }
 
+static LIBRARY_LOCK: Mutex<()> = Mutex::new(());
+
+/// Блокировка `library.json` на время «прочитать — изменить — записать».
+pub fn lock_library() -> MutexGuard<'static, ()> {
+    LIBRARY_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Применяет изменение к свежей библиотеке и сохраняет её под общим локом.
+///
+/// Лок берётся только на чтение и запись: скачивание и распаковка должны идти
+/// до вызова, иначе параллельные задачи встанут в очередь на минуты.
+pub fn update_library<F>(root: &Path, change: F) -> Result<(), String>
+where
+    F: FnOnce(&mut Library) -> Result<(), String>,
+{
+    let _guard = lock_library();
+    let mut library = Library::load(root);
+    change(&mut library)?;
+    library.save(root)
+}
+
 impl Library {
     pub fn path(root: &Path) -> PathBuf {
         root.join("library.json")
     }
 
     pub fn load(root: &Path) -> Self {
-        std::fs::read_to_string(Self::path(root))
-            .ok()
-            .and_then(|s| serde_json::from_str(crate::util::strip_bom(&s)).ok())
-            .unwrap_or_default()
+        let path = Self::path(root);
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return Self::default();
+        };
+        match serde_json::from_str(crate::util::strip_bom(&text)) {
+            Ok(library) => library,
+            Err(err) => {
+                // Битый файл не затираем: откладываем рядом для ручного разбора.
+                let backup = root.join(format!("library.json.broken-{}", now_ts()));
+                eprintln!("library.json: {err}; moved to {}", backup.display());
+                let _ = std::fs::rename(&path, &backup);
+                Self::default()
+            }
+        }
     }
 
     pub fn save(&self, root: &Path) -> Result<(), String> {
         let text = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-        std::fs::write(Self::path(root), text).map_err(|e| format!("library.json: {e}"))
+        crate::util::write_atomic(&Self::path(root), text).map_err(|e| format!("library.json: {e}"))
     }
 
     pub fn for_game(&self, game_id: &str) -> impl Iterator<Item = &InstalledMod> {
@@ -668,6 +700,46 @@ mod tests {
             plain.file_name().unwrap().to_string_lossy().to_lowercase(),
             "yanderesimulator.exe"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parallel_updates_do_not_lose_records() {
+        let dir = std::env::temp_dir().join(format!("yanlan_lib_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::thread::scope(|scope| {
+            for index in 0..8 {
+                let dir = &dir;
+                scope.spawn(move || {
+                    update_library(dir, |library| {
+                        let mut item = InstalledMod::new("m", "n", "mod", "a", "game", Vec::new());
+                        item.key = format!("key-{index}");
+                        library.add(item);
+                        Ok(())
+                    })
+                    .unwrap();
+                });
+            }
+        });
+        assert_eq!(Library::load(&dir).mods.len(), 8);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn corrupt_library_is_moved_aside() {
+        let dir = std::env::temp_dir().join(format!("yanlan_lib_bad_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(Library::path(&dir), "{ broken").unwrap();
+        assert!(Library::load(&dir).mods.is_empty());
+        assert!(!Library::path(&dir).exists());
+        let moved = std::fs::read_dir(&dir).unwrap().flatten().any(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with("library.json.broken-")
+        });
+        assert!(moved);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -1,0 +1,1082 @@
+﻿# YanLan 2.2.1 — Технический обзор задач
+
+Документ описывает проблемы кода, требующие исправления. Все пути —
+относительно корня репозитория. Ссылки на разделы SOP.txt указаны там,
+где поведение меняется.
+
+---
+
+## C1. Атомарная запись JSON-файлов
+
+Файлы:
+  src/util.rs — новая функция write_atomic.
+  src/library.rs::Library::save — std::fs::write → util::write_atomic.
+  src/library.rs::write_meta — то же.
+  src/config.rs::Config::save — то же.
+  src/builds.rs::save_cache — то же.
+  src/mods.rs::save_cache — то же.
+
+Текущее поведение:
+Все сохранения используют std::fs::write(path, text). Если процесс убит
+или питание пропало в момент записи, файл останется обрезанным.
+Для library.json и .yanlan.json это означает потерю всех записей об
+установленных модах или потерю метаданных сборки.
+
+Проблема:
+library.json, .yanlan.json, config.json — пользовательские данные, не
+восстанавливаемые из сети. Обрезка = потеря. Кэши (builds.json, mods.json)
+менее критичны (скачиваются заново), но единый механизм проще.
+
+Что сделать:
+
+1. В src/util.rs добавить:
+   pub fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
+       let tmp = path.with_extension("json.tmp");
+       if let Some(parent) = path.parent() {
+           std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+       }
+       let mut file = std::fs::File::create(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
+       use std::io::Write;
+       file.write_all(text.as_bytes()).map_err(|e| format!("{}: {e}", tmp.display()))?;
+       file.sync_all().map_err(|e| format!("{}: {e}", tmp.display()))?;
+       drop(file);
+       std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))?;
+       Ok(())
+   }
+   Расширение .json.tmp — чтобы find_game_root и подобные не путали
+   временный файл с данными.
+
+2. Заменить все std::fs::write в перечисленных функциях на util::write_atomic
+   с пробросом ошибки через существующий Result (или через let _ = для
+   кэшей, где ошибка не критична — но лучше пробросить в лог).
+
+3. Config::save сейчас возвращает () и игнорирует ошибку. Оставить (), но
+   логировать через eprintln! при ошибке — это не UI-путь.
+
+Тест (в src/util.rs, mod tests):
+#[test]
+fn write_atomic_replaces_file() {
+    let dir = std::env::temp_dir().join(format!("yanlan_atomic_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("test.json");
+    std::fs::write(&path, "old").unwrap();
+    write_atomic(&path, "new").unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+    assert!(!dir.join("test.json.tmp").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+Acceptance:
+  Все std::fs::write для persistent JSON заменены.
+  Тест write_atomic_replaces_file проходит.
+  cargo test — 41 passed, 1 ignored.
+  SOP.txt разделы 9.2, 9.3, 9.4 — упомянуть атомарную запись.
+
+---
+
+## C2. Гонка при записи library.json
+
+Файлы:
+  src/library.rs — новый мьютекс.
+  src/jobs.rs — install_catalog_mods, install_local_archive, uninstall_mod, delete_game.
+
+Текущее поведение:
+Каждая из четырёх фоновых задач делает:
+  let mut library = Library::load(&cfg.root_dir);
+  // ... мутации ...
+  library.save(&cfg.root_dir)?;
+Если пользователь запускает установку мода в одну сборку и одновременно
+удаляет мод из другой, оба потока читают одно состояние, каждый пишет своё,
+последний выигрывает. Первый мод теряется.
+
+Проблема:
+Library — общий ресурс, но защита — только на уровне одного процесса
+внутри одного потока. Параллельные jobs::spawn не сериализуются.
+
+Что сделать:
+
+1. В src/library.rs добавить:
+   use std::sync::Mutex;
+   static LIBRARY_LOCK: Mutex<()> = Mutex::new(());
+
+   pub fn lock_library() -> std::sync::MutexGuard<'static, ()> {
+       LIBRARY_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+   }
+   unwrap_or_else(|e| e.into_inner()) — чтобы паника одного потока не
+   отравляла мьютекс для остальных.
+
+2. В src/jobs.rs в каждой из четырёх функций обернуть read-modify-write:
+   let _guard = crate::library::lock_library();
+   let mut library = Library::load(&cfg.root_dir);
+   // ...
+   library.save(&cfg.root_dir)?;
+   // _guard отпускается в конце скоупа
+
+3. App::reload_library в UI-потоке не блокируется мьютексом — это чтение
+   без модификации, и оно увидит либо старое, либо новое состояние целиком
+   (атомарное переименование из C1 гарантирует это).
+
+Тест (интеграционный, в src/library.rs::tests):
+#[test]
+fn parallel_installs_do_not_lose_mods() {
+    let root = std::env::temp_dir().join(format!("yanlan_race_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("games")).unwrap();
+    let handles: Vec<_> = (0..10).map(|i| {
+        let root = root.clone();
+        std::thread::spawn(move || {
+            let _guard = crate::library::lock_library();
+            let mut lib = Library::load(&root);
+            let mut item = InstalledMod::new(&format!("mod{i}"), &format!("Mod {i}"), "mod", "", "game", Vec::new());
+            item.key = format!("mod{i}-0");
+            lib.add(item);
+            lib.save(&root).unwrap();
+        })
+    }).collect();
+    for h in handles { h.join().unwrap(); }
+    let lib = Library::load(&root);
+    assert_eq!(lib.mods.len(), 10);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+Acceptance:
+  Тест проходит.
+  install_catalog_mods, install_local_archive, uninstall_mod, delete_game
+  держат мьютекс во время read-modify-write.
+  При параллельной установке двух модов в разные сборки оба попадают в library.json.
+
+---
+
+## C3. start_parallel_job — невидимые фоновые задачи
+
+Файлы:
+  src/app.rs::start_parallel_job, App::pump, App::begin_job.
+  src/jobs.rs — никаких правок не нужно.
+
+Текущее поведение:
+  pub fn start_parallel_job(&mut self, title: String, progress: Progress) {
+      if self.progress.is_none() {
+          self.begin_job(title, progress);
+      } else {
+          self.log(title);  // прогресс теряется
+      }
+  }
+Если задача A уже в статус-баре, а пользователь запускает задачу B:
+  B уходит только в лог.
+  Когда A завершится, Ev::JobDone с id_A очистит progress и progress_id.
+  B всё ещё выполняется, но её прогресса нигде нет.
+  Когда B завершится, Ev::JobDone с id_B — progress_id уже None, ничего не происходит.
+Пользователь видит: «полоса прогресса была, потом исчезла». И не знает, что
+установка B ещё идёт.
+
+Проблема:
+Фоновые задачи живут, но UI о них не знает. Особенно заметно с
+download_catalog_mod (кнопка «Скачать» у зависимости во время установки).
+
+Что сделать:
+
+1. Добавить в App поле:
+   pub pending_jobs: Vec<(u64, String, Progress)>,
+
+2. Переписать start_parallel_job:
+   pub fn start_parallel_job(&mut self, title: impl Into<String>, progress: Progress) {
+       let title = title.into();
+       if self.progress.is_none() {
+           self.begin_job(title, progress);
+       } else {
+           self.pending_jobs.push((progress.id(), title, progress));
+       }
+   }
+
+3. В App::pump при обработке Ev::JobDone { id, .. }:
+   if self.progress_id == Some(id) {
+       self.progress = None;
+       self.progress_id = None;
+       self.job_title = None;
+       if let Some((next_id, next_title, next_progress)) = self.pending_jobs.first() {
+           let snap = next_progress.snapshot();
+           if !snap.finished {
+               let next_id = *next_id;
+               let next_title = next_title.clone();
+               let next_progress = next_progress.clone();
+               self.pending_jobs.remove(0);
+               self.progress_id = Some(next_id);
+               self.job_title = Some(next_title);
+               self.progress = Some(next_progress);
+               self.speed = (Instant::now(), 0, 0.0);
+           } else {
+               self.pending_jobs.remove(0);
+           }
+       }
+   }
+   self.pending_jobs.retain(|(pending_id, _, _)| *pending_id != id);
+
+4. В App::update при busy учитывать и pending_jobs:
+   let busy = self.progress.is_some() || !self.pending_jobs.is_empty() || self.builds_loading;
+
+5. В статус-баре при наличии pending_jobs добавить в правую часть:
+   if !self.pending_jobs.is_empty() {
+       ui.label(RichText::new(fill(
+           &pick("+{count} в фоне", "+{count} in background"),
+           &[("count", &self.pending_jobs.len().to_string())],
+       )).size(10.5).color(p.muted));
+   }
+
+Тест: не автоматизируется (UI). Ручной сценарий в SOP.txt раздел 13.2,
+добавить пункт 21: «Запустить установку мода, во время неё нажать "Скачать"
+у зависимости. Проверить, что обе задачи завершаются, и после первой в
+статус-баре появляется вторая».
+
+Acceptance:
+  Поле pending_jobs есть.
+  При запуске второй параллельной задачи она встаёт в очередь.
+  После завершения первой вторая появляется в статус-баре с корректным progress_id.
+  Ручной сценарий проходит.
+
+---
+
+## S1. cfg path из манифеста не проверяется на path traversal
+
+Файлы:
+  src/app.rs::open_mod_cfg (там строится path = game.path.join(&rel)).
+  src/cfg_edit.rs::Editor::open (принимает path).
+
+Текущее поведение:
+  let rel = cfg.replace('\\', "/").trim_start_matches('/').to_string();
+  let path = game.path.join(&rel);
+  if !path.is_file() { ... return; }
+  match Editor::open(name, &rel, &path) { ... }
+Значение cfg берётся из info.yaml. Манифест с cfg: "../../../Windows/System32/config/SAM"
+или cfg: "C:/Windows/System32/drivers/etc/hosts" (после replace('\\','/'))
+объединится с путём сборки и позволит редактору читать/писать файлы вне
+папки сборки. Проверка is_file() не помогает — файл существует.
+
+SOP.txt раздел 14 фиксирует это как остаточный риск:
+«Значение cfg из удалённого манифеста нормализуется, но сейчас не
+проверяется на обход через родительский каталог перед объединением с
+путём сборки.»
+
+Проблема:
+Не выполнение кода, но чтение и запись произвольного файла в контексте
+пользователя. Достаточно одного мода с вредоносным манифестом в каталоге.
+
+Что сделать:
+
+1. В src/app.rs::open_mod_cfg заменить построение пути:
+   let rel = cfg.replace('\\', "/").trim_start_matches('/').to_string();
+   let Some(safe_rel) = crate::util::safe_relative(&rel) else {
+       self.toast(
+           fill(
+               &pick(
+                   "Некорректный путь к конфигу в манифесте: {path}",
+                   "Invalid config path in the manifest: {path}",
+               ),
+               &[("path", &rel)],
+           ),
+           false,
+       );
+       return;
+   };
+   let path = game.path.join(&safe_rel);
+
+2. В src/cfg_edit.rs::Editor::open добавить ту же проверку на входе —
+   защита в глубину:
+   let Some(safe_rel) = crate::util::safe_relative(rel) else {
+       return Err(format!("invalid config path: {rel}"));
+   };
+   let expected = base.join(&safe_rel);
+   if path != expected {
+       return Err(format!("config path escapes the build: {}", path.display()));
+   }
+   Но проще: Editor::open принимает уже проверенный path и не пересчитывает.
+   Достаточно проверки в open_mod_cfg.
+
+3. В src/mods.rs при парсинге RawManifest можно дополнительно логировать
+   подозрительные cfg (начинается с "/" или содержит ".."), чтобы владелец
+   каталога видел проблему в логе:
+   if raw.cfg.contains("..") || raw.cfg.starts_with('/') || raw.cfg.contains(":/") {
+       // лог через eprintln! в фоновом потоке — UI-путь недоступен
+   }
+   Это опционально, не блокирует.
+
+Тест (в src/cfg_edit.rs::tests или src/app.rs, если получится):
+Проверить, что safe_relative отклоняет:
+  assert!(crate::util::safe_relative("../evil").is_none());
+  assert!(crate::util::safe_relative("a/../../b").is_none());
+  assert!(crate::util::safe_relative("C:/Windows/System32").is_none());
+Эти тесты уже есть в util.rs::tests. Добавить интеграционный в app.rs
+нецелесообразно (нужен App). Достаточно, что open_mod_cfg использует
+safe_relative — это проверено юнит-тестом самой функции.
+
+Acceptance:
+  open_mod_cfg использует safe_relative перед join.
+  При cfg с ".." или абсолютным путём редактор не открывается, показывается
+  уведомление об ошибке.
+  SOP.txt раздел 14: убрать cfg из «остаточных рисков», добавить в «меры».
+
+---
+
+## I1. refresh_builds / refresh_catalog не должны очищать данные до успеха
+
+Файлы: src/app.rs::refresh_builds, src/app.rs::refresh_catalog.
+
+Текущее:
+  self.builds.clear();
+  self.builds_loaded = false;
+до запуска фоновой задачи. Если сеть откажет, пользователь останется с
+пустым списком, хотя кэш на диске валиден.
+
+Что сделать:
+Убрать clear() и builds_loaded = false. Оставить только builds_loading = true.
+В App::pump при Ev::Builds с успехом — заменить данные. При ошибке — оставить
+старые, показать ошибку в статус-баре (уже реализовано через builds_error).
+Логику уточнить:
+  Ev::Builds { builds, fetched_at, error } => {
+      self.builds_loading = false;
+      if !builds.is_empty() {
+          self.set_builds(builds);
+          self.builds_loaded = true;
+          self.builds_error = None;
+          self.builds_fetched_at = Some(fetched_at);
+      } else {
+          self.builds_error = error;
+      }
+  }
+То же для каталога.
+
+Тест: ручной — в SOP.txt раздел 13.2 добавить пункт 22: «Настроить
+недоступный прокси, нажать "Обновить каталог", проверить, что список
+остался прежним, а ошибка видна».
+
+---
+
+## I2. net::agent() создаёт новый ureq::Agent на каждый запрос
+
+Файлы: src/net.rs::agent.
+
+Текущее: каждый get_json/get_text/download создаёт новый Agent.
+Пулинг соединений не работает. Для archive.org (6 параллельных запросов
+к разным зеркалам) это заметно.
+
+Что сделать:
+  static AGENT: OnceLock<RwLock<Option<ureq::Agent>>> = OnceLock::new();
+
+  fn agent() -> ureq::Agent {
+      let cell = AGENT.get_or_init(|| RwLock::new(None));
+      if let Ok(guard) = cell.read() {
+          if let Some(agent) = guard.as_ref() {
+              return agent.clone();
+          }
+      }
+      let built = build_agent();
+      if let Ok(mut guard) = cell.write() {
+          *guard = Some(built.clone());
+      }
+      built
+  }
+
+  fn build_agent() -> ureq::Agent { /* текущее тело agent() */ }
+
+  pub fn set_proxy(proxy: Option<String>) {
+      if let Ok(mut guard) = proxy_cell().write() {
+          *guard = proxy.filter(|p| !p.trim().is_empty());
+      }
+      if let Some(cell) = AGENT.get() {
+          if let Ok(mut guard) = cell.write() {
+              *guard = None;
+          }
+      }
+  }
+
+Тест: не автоматизируется (сеть). Проверка: после смены прокси следующий
+запрос идёт через новый прокси.
+
+---
+
+## I3. install_game не откатывает частичную установку
+
+Файлы: src/installer.rs::install_game.
+
+Текущее:
+  extract_archive(archive, staging, progress)?;
+  let root = find_game_root(staging);
+  fs::create_dir_all(target)?;
+  move_contents(&root, target)?;
+  remove_dir_quiet(staging);
+  Ok(target.to_path_buf())
+Если move_contents упадёт на середине (диск кончился, файл занят), в
+target останется часть файлов. scan_games пропустит её (нет .exe), но
+место занято.
+
+Что сделать:
+  let result = (|| -> Result<(), String> {
+      remove_dir_quiet(staging);
+      progress.stage(...);
+      extract_archive(archive, staging, progress)?;
+      progress.stage(...);
+      let root = find_game_root(staging);
+      if !has_game_marker(&root) {
+          return Err(pick(
+              "В архиве не найден исполняемый файл игры. Возможно, архив неполный.",
+              "No game executable found in the archive. The archive may be incomplete.",
+          ).to_string());
+      }
+      progress.stage(...);
+      fs::create_dir_all(target).map_err(|e| format!("{}: {e}", target.display()))?;
+      move_contents(&root, target)?;
+      Ok(())
+  })();
+  match result {
+      Ok(()) => {
+          remove_dir_quiet(staging);
+          Ok(target.to_path_buf())
+      }
+      Err(err) => {
+          remove_dir_quiet(staging);
+          remove_dir_quiet(target);
+          Err(err)
+      }
+  }
+
+Тест: добавить в installer.rs::tests тест, который делает install_game на
+архив с недоступной целью (target — файл, а не каталог) и проверяет, что
+target не создался после ошибки.
+
+---
+
+## I4. find_game_root — фиксированная глубина 2
+
+Файлы: src/installer.rs::find_game_root.
+
+Текущее: проверяет корень, детей, внуков. Глубже — нет.
+YandereSimulator/YandereSimulator/YandereSimulator_Data не находится.
+Возвращает верхнюю папку, find_exe → None, install_game возвращает Ok, но
+сборка не появляется в списке.
+
+Что сделать:
+  pub fn find_game_root(dir: &Path) -> PathBuf {
+      if has_game_marker(dir) {
+          return dir.to_path_buf();
+      }
+      let mut queue = vec![(dir.to_path_buf(), 0usize)];
+      while let Some((path, depth)) = queue.pop() {
+          if depth >= 4 {
+              continue;
+          }
+          for child in subdirs(&path) {
+              if has_game_marker(&child) {
+                  return child;
+              }
+              queue.push((child, depth + 1));
+          }
+      }
+      let dirs = subdirs(dir);
+      let files = fs::read_dir(dir).map(|e| e.flatten().filter(|x| x.path().is_file()).count()).unwrap_or(0);
+      if dirs.len() == 1 && files == 0 {
+          dirs.into_iter().next().unwrap()
+      } else {
+          dir.to_path_buf()
+      }
+  }
+Плюс проверка has_game_marker в install_game (см. I3) закрывает молчаливый провал.
+
+Тест (в installer.rs::tests):
+#[test]
+fn finds_deeply_nested_game_root() {
+    let root = temp_dir("deeproot");
+    let nested = root.join("a").join("b").join("YandereSimulator");
+    fs::create_dir_all(nested.join("YandereSimulator_Data")).unwrap();
+    fs::write(nested.join("YandereSimulator.exe"), b"exe").unwrap();
+    assert_eq!(find_game_root(&root), nested);
+    let _ = fs::remove_dir_all(root);
+}
+
+---
+
+## I5. download_catalog — многотомные архивы не убираются при ошибке
+
+Файлы: src/jobs.rs::download_catalog.
+
+Текущее: части качаются в <stem>.part1, .part2, ... Склеиваются в dest.
+Если склейка упала — dest удаляется, но части остаются. Если скачивание
+part2 упало — part1 остаётся в downloads/ навсегда.
+
+Что сделать:
+Обернуть скачивание и склейку в замыкание, при ошибке удалить все части:
+  let result = (|| -> Result<(), String> {
+      // скачивание и склейка
+      Ok(())
+  })();
+  if result.is_err() {
+      for part in &files {
+          let _ = std::fs::remove_file(part);
+      }
+      let _ = std::fs::remove_file(&dest);
+      return Err(...);
+  }
+
+Тест: ручной — указать в DL_url три части, две валидные, третья 404.
+Проверить, что после ошибки в downloads/ не осталось .part*.
+
+---
+
+## I6. Library::load молча теряет данные при повреждённом JSON
+
+Файлы: src/library.rs::Library::load.
+
+Текущее:
+  std::fs::read_to_string(Self::path(root)).ok()
+      .and_then(|s| serde_json::from_str(&s).ok())
+      .unwrap_or_default()
+Если файл есть, но повреждён (обрезан, битый UTF-8), load вернёт пустую
+библиотеку. Все записи об установленных модах «пропадают» — без ошибки,
+без записи в лог.
+
+Что сделать:
+  pub fn load(root: &Path) -> Self {
+      let path = Self::path(root);
+      match std::fs::read_to_string(&path) {
+          Ok(text) => match serde_json::from_str(crate::util::strip_bom(&text)) {
+              Ok(lib) => lib,
+              Err(err) => {
+                  let broken = path.with_extension("json.broken");
+                  let _ = std::fs::rename(&path, &broken);
+                  eprintln!("library.json is corrupt: {err}. Moved to {}", broken.display());
+                  Library::default()
+              }
+          },
+          Err(_) => Library::default(),
+      }
+  }
+eprintln! — потому что load может вызываться из фонового потока, где нет
+доступа к журналу UI. В App::reload_library можно дополнительно проверить
+существование .broken и записать в лог.
+
+Тест:
+#[test]
+fn corrupt_library_is_moved_aside() {
+    let root = std::env::temp_dir().join(format!("yanlan_corrupt_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(Library::path(&root), "{not valid json").unwrap();
+    let lib = Library::load(&root);
+    assert!(lib.mods.is_empty());
+    assert!(Library::path(&root).with_extension("json.broken").exists());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+---
+
+## I7. catalog_details — installed для Build всегда false
+
+Файлы: src/catalog.rs::draw_catalog_details.
+
+Текущее:
+  let installed = match &game {
+      Some(build) => {
+          !group.is_build()
+              && (self.library.for_game(&build.meta.id).any(...) || build.meta.ioa.iter().any(...))
+      }
+      None => false,
+  };
+Для мода типа Build installed всегда false, кнопка «Создать сборку» всегда
+активна. Пользователь может создать второй экземпляр того же Build-мода
+под другим именем.
+
+Решение:
+Скорее всего, намеренно (пользователь явно указал другое имя). Добавить
+комментарий в код:
+  // Мод типа Build можно устанавливать многократно под разными именами:
+  // каждая копия — независимая сборка. Состояние "installed" для Build не имеет смысла.
+Тест: не нужен.
+
+---
+
+## I8. install_catalog_mods не откатывает установленные зависимости при ошибке
+
+Файлы: src/jobs.rs::install_catalog_mods.
+
+Текущее:
+  for (index, variant) in items.iter().enumerate() {
+      let archive = download_catalog(c, &cfg, variant, p)?;
+      let files = installer::install_mod(...)?;
+      // запись в library
+      library.add(item);
+      library.save(&cfg.root_dir)?;
+  }
+Если items = [dep1, dep2, main] и dep2 упал — dep1 уже установлен и записан
+в library. Пользователь видит «установка провалилась», но в сборке остался
+dep1 без main. Он не знает, что dep1 — лишний.
+
+Проблема:
+Зависимости устанавливаются последовательно, но при сбое одной из них
+предыдущие не откатываются. Связано с I3 (install_game), но здесь речь о
+модах, а не о сборках.
+
+Что сделать:
+
+Вариант A (простой, минимальный):
+  Собрать список успешно установленных, при ошибке записать в лог через
+  c.log(...) и вернуть ошибку с перечислением того, что осталось:
+  Err(fill(
+      &pick(
+          "Установка прервана. Уже установлено: {list}",
+          "Installation interrupted. Already installed: {list}",
+      ),
+      &[("list", &installed.join(", "))],
+  ))
+  Пользователь увидит, какие моды остались, и сможет удалить их вручную.
+
+Вариант B (правильный, но сложнее):
+  При ошибке вызвать installer::uninstall_mod для каждого уже
+  установленного и убрать записи из library. Требует сохранения backup_dir
+  и files для каждой уже установленной записи — в текущем цикле они есть,
+  но не накапливаются. Нужен Vec<InstalledMod> для отката.
+  При откате также вызвать library.remove(key) для каждой записи и
+  library.save() один раз в конце.
+
+Рекомендация — вариант B, потому что он даёт пользователю чистое состояние.
+Но вариант A тоже приемлем, если B кажется слишком объёмным.
+
+Тест (для варианта B):
+Не автоматизируется без мок-архива с гарантированной ошибкой. Ручной
+сценарий в SOP.txt раздел 13.2, пункт 23: «Установить мод с двумя
+зависимостями, у второй зависимости подменить DL_url на недоступный.
+Проверить, что после ошибки ни dep1, ни main не остались в библиотеке
+и в сборке».
+
+---
+
+## I9. delete_game удаляет записи library.json до удаления каталога
+
+Файлы: src/jobs.rs::delete_game.
+
+Текущее:
+  let keys: Vec<String> = library.for_game(&game.meta.id).map(|m| m.key.clone()).collect();
+  for key in keys {
+      library.remove(&key);
+  }
+  library.save(&cfg.root_dir)?;
+  std::fs::remove_dir_all(&game.path)?;
+Если remove_dir_all упадёт (файл занят, нет прав) — записи о модах удалены,
+а файлы остались. Пользователь не сможет их корректно удалить через
+лаунчер (записи о резервных копиях и путях потеряны).
+
+Проблема:
+Порядок операций неверный: сначала надо удалить файлы, потом записи.
+Если удаление файлов упало — записи остаются, пользователь может повторить.
+
+Что сделать:
+  p.stage(pick("Удаление сборки", "Deleting build"));
+  std::fs::remove_dir_all(&game.path).map_err(|e| fill(
+      &pick("Не удалось удалить {path}: {err}", "Failed to delete {path}: {err}"),
+      &[("path", &game.path.display().to_string()), ("err", &e.to_string())],
+  ))?;
+  // Только после успешного удаления каталога убираем записи.
+  let _guard = crate::library::lock_library();
+  let mut library = Library::load(&cfg.root_dir);
+  let keys: Vec<String> = library.for_game(&game.meta.id).map(|m| m.key.clone()).collect();
+  for key in keys {
+      library.remove(&key);
+  }
+  library.save(&cfg.root_dir)?;
+
+Тест: ручной — сделать файл в сборке занятым (открыть в редакторе),
+запустить удаление, проверить, что записи library.json остались.
+
+---
+
+## J1. cfg_edit::save добавляет пробел после : для Pose-конфигов
+
+Файлы: src/cfg_edit.rs::save.
+
+Текущее:
+  let head = line[..=pos].trim_end().to_string();
+  let mut new_line = head;
+  if !setting.value.is_empty() {
+      new_line.push(' ');
+      new_line.push_str(&setting.value);
+  }
+Для UIColor:0.62,0,0,1 после сохранения получается UIColor: 0.62,0,0,1.
+Pose Mod парсит и так, и так, но исходный формат был без пробела, и тест
+colon_values_keep_no_space_on_save проверяет именно формат без пробела —
+но через format!, а не через save. Тест зелёный, реальное поведение — с
+пробелом.
+
+Что сделать:
+  let (pos, sep) = if let Some(eq) = line.find('=') {
+      (eq, '=')
+  } else if let Some(colon) = line.find(':') {
+      (colon, ':')
+  } else {
+      continue;
+  };
+  let head = line[..=pos].trim_end().to_string();
+  let mut new_line = head;
+  if !setting.value.is_empty() {
+      if sep == '=' {
+          new_line.push(' ');
+      }
+      new_line.push_str(&setting.value);
+  }
+  new_line.push_str(&setting.trailing);
+  *line = new_line;
+
+Тест — заменить colon_values_keep_no_space_on_save на реальный тест save
+(понадобится сделать Editor::save публичным или pub(crate)):
+#[test]
+fn save_preserves_colon_no_space() {
+    let dir = std::env::temp_dir().join(format!("yanlan_cfg_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Settings.txt");
+    std::fs::write(&path, "UIColor:0.62,0,0,1\nPosingMenu:F9\n").unwrap();
+    let mut editor = Editor::open("test", "Settings.txt", &path).unwrap();
+    editor.settings[0].value = "0.5,0,0,1".to_string();
+    editor.save().unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(text, "UIColor:0.5,0,0,1\nPosingMenu:F9\n");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+---
+
+## J2. Library::add не дедуплицирует bundled-моды
+
+Файлы: src/library.rs::add, src/catalog.rs::prepare_catalog_install.
+
+Текущее:
+Если пользователь ставит мод из каталога, а потом создаёт сборку с ioa,
+содержащим тот же mod_id, в библиотеке окажется два: bundled (из ioa) и
+обычный (из установки). installed в catalog.rs объединяет оба через
+HashSet, визуально «Установлено». Но installed_view покажет оба: с тегом
+«в сборке» и без.
+
+Что сделать:
+В prepare_catalog_install перед установкой проверять ioa:
+  if game.meta.ioa.iter().any(|e| mods::dep_spec(e).0.eq_ignore_ascii_case(&variant.id)) {
+      self.toast(fill(
+          &pick("«{name}» уже входит в эту сборку", "“{name}” is already included in this build"),
+          &[("name", &variant.name)],
+      ), false);
+      return;
+  }
+
+Тест: ручной — установить мод, потом создать сборку с ioa, содержащим
+тот же mod_id. Проверить, что «Установить» недоступна.
+
+---
+
+## J3. player::LocalServer отвечает HTML на любой путь
+
+Файлы: src/player.rs::LocalServer::start.
+
+Текущее: любой запрос получает ту же HTML-страницу с iframe.
+/favicon.ico, /robots.txt — тоже.
+
+Что сделать:
+  let mut buffer = [0u8; 2048];
+  let n = stream.read(&mut buffer).unwrap_or(0);
+  let request = String::from_utf8_lossy(&buffer[..n]);
+  let path = request.split_whitespace().nth(1).unwrap_or("/");
+  let response = if path == "/" || path.starts_with("/?") {
+      format!("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", page.len(), page)
+  } else {
+      "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string()
+  };
+  let _ = stream.write_all(response.as_bytes());
+
+Тест: не критичен. Достаточно ручной проверки, что плеер работает.
+
+---
+
+## J4. rfd::FileDialog блокирует UI-поток
+
+Файлы: src/installed.rs::handle_installed_action (InstallLocalFile),
+src/settings.rs::settings_view (pick_root).
+
+Текущее:
+  let Some(path) = rfd::FileDialog::new()
+      .add_filter(...)
+      .set_directory(self.cfg.downloads_dir())
+      .pick_file()
+  else { return; };
+Диалог вызывается прямо из обработчика клика. Пока пользователь выбирает
+файл, окно лаунчера не перерисовывается: анимации замирают, фоновые задачи
+продолжают работать, но их прогресс не виден, кнопки не реагируют.
+
+Проблема:
+rfd::FileDialog::pick_file() блокирует вызывающий поток до закрытия
+диалога. Для лаунчера с анимациями и фоновыми задачами это заметный затык.
+
+Что сделать:
+Вариант A (минимальный, но не идеальный):
+  Использовать rfd::FileDialog::pick_file() только в одном месте, не
+  заботясь о блокировке. Для лаунчера это приемлемо, потому что диалог
+  обычно открыт недолго.
+
+Вариант B (правильный):
+  Перейти на rfd::AsyncFileDialog, который возвращает future и не
+  блокирует поток. Требует либо tokio-рантайм, либо ручной опрос через
+  канал. В egui это делается так:
+    let task = rfd::AsyncFileDialog::new().pick_file();
+    let ctx = self.ctx.clone();
+    std::thread::spawn(move || {
+        let file = futures::executor::block_on(task);
+        if let Some(file) = file {
+            // отправить через канал в App
+        }
+        ctx.request_repaint();
+    });
+  Добавляет зависимость futures (или pollster). Для одного диалога это
+  перебор.
+
+Рекомендация: оставить вариант A, но добавить комментарий в код:
+  // Диалог блокирует UI-поток. Для rfd это норма; альтернатива —
+  // AsyncFileDialog с futures, но это тянет зависимость ради одного вызова.
+Не менять без явного запроса.
+
+Тест: не автоматизируется.
+
+---
+
+## J5. decode_cover удаляет кэш на любой ошибке (петля)
+
+Файлы: src/jobs.rs::fetch_cover.
+
+Текущее:
+  if result.is_err() {
+      let _ = std::fs::remove_file(cache_dir.join("covers").join(format!("{key}.img")));
+  }
+  c.emit(Ev::Cover { key, result });
+Если скачанный файл не декодируется (неподдерживаемый формат, повреждён),
+кэш удаляется. На следующей сессии (или после очистки catalog_cover_failed)
+мод снова запрашивает обложку, снова скачивает, снова не декодирует —
+бесконечная петля между сессиями. Внутри одной сессии catalog_cover_failed
+защищает, но при перезапуске сбрасывается.
+
+Проблема:
+Файл, который заведомо не декодируется, скачивается заново при каждом
+запуске. Для больших GIF это лишний трафик.
+
+Что сделать:
+Не удалять кэш, если ошибка — «неподдерживаемый формат». Различать
+транспортные ошибки (сеть, 404) и ошибки декодирования:
+  let result = (|| -> Result<Cover, String> {
+      let dir = cache_dir.join("covers");
+      std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+      let file = dir.join(format!("{key}.img"));
+      let bytes = if file.exists() {
+          std::fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))?
+      } else {
+          let bytes = net::get_bytes(&url)?;
+          // Не удалять кэш при ошибке записи — данные всё равно скачаны.
+          let _ = std::fs::write(&file, &bytes);
+          bytes
+      };
+      match decode_cover(&bytes, &key) {
+          Ok(cover) => Ok(cover),
+          Err(err) => {
+              // Помечаем файл как «известно битый», чтобы не скачивать повторно.
+              let _ = std::fs::write(
+                  dir.join(format!("{key}.broken")),
+                  err.as_bytes(),
+              );
+              Err(err)
+          }
+      }
+  })();
+  // Транспортные ошибки (get_bytes вернул Err) — удалять кэш не нужно,
+  // файла и так нет. Ошибки записи — тоже.
+  // Удалять .img нужно только если кэш есть, но повреждён при чтении.
+  c.emit(Ev::Cover { key, result });
+И на входе, перед скачиванием, проверять наличие <key>.broken и не качать:
+  if dir.join(format!("{key}.broken")).exists() {
+      return Err(format!("cover {key}: previously failed"));
+  }
+Это защищает от повторных загрузок между сессиями.
+
+Тест: не автоматизируется без сети. Ручной сценарий: подложить вручную
+файл covers/<hash>.img с мусором, перезапустить лаунчер, проверить, что
+после первой неудачи появился .broken и при следующем запуске мод не
+пытается скачать обложку заново.
+
+---
+
+## J6. mods::fetch_manifests молча теряет битые манифесты
+
+Файлы: src/mods.rs::fetch_manifests.
+
+Текущее:
+  for item in guard.into_iter().flatten() {
+      match item {
+          Ok(value) => loaded.push(value),
+          Err(err) => errors.push(err),
+      }
+  }
+  if loaded.is_empty() {
+      return Err(errors.into_iter().next().unwrap_or_else(|| { ... }));
+  }
+  Ok(loaded)
+Отдельные ошибки собираются в errors, но если хотя бы один манифест
+успешен, errors никуда не идут. Мод с битым info.yaml молча выпадает из
+каталога. В лог ничего не пишется.
+
+Проблема:
+Владелец каталога (bylka882-png) не узнает, что один из его манифестов
+сломан. Пользователи не видят мод, но не понимают почему.
+
+Что сделать:
+Логировать ошибки через progress.detail или через отдельный канал событий.
+В src/jobs.rs::fetch_catalog после успешного получения списка записать в
+лог количество ошибок и первые несколько текстов:
+  match mods::fetch(p) {
+      Ok(list) => {
+          if !list.is_empty() {
+              c.log(fill(
+                  &pick("Каталог модов обновлён: {count}", "Mod catalog updated: {count}"),
+                  &[("count", &list.len().to_string())],
+              ));
+          }
+          // Список ошибок доступен, если fetch вернёт его вторым элементом.
+          // Требует изменения сигнатуры fetch.
+      }
+  }
+Требует изменения сигнатуры:
+  pub fn fetch(progress: &Progress) -> Result<(Vec<ModGroup>, Vec<String>), String>
+где второй элемент — список ошибок парсинга (не транспортных, а именно
+битых манифестов). jobs::fetch_catalog логирует их через c.log.
+
+Если менять сигнатуру не хочется — минимальный вариант: в fetch_manifests
+вызывать eprintln! для каждой ошибки. В логе UI не появится, но хотя бы
+не пропадёт.
+
+Тест: не автоматизируется без сети. Юнит-тест на fetch_manifests с мок-
+данными сложен, потому что функция ходит по сети через net::get_text.
+
+---
+
+## J7. builds::fetch_all показывает только первую ошибку
+
+Файлы: src/builds.rs::fetch_all.
+
+Текущее:
+  if builds.is_empty() {
+      return Err(fill(
+          &pick("Не удалось получить список сборок. {details}", ...),
+          &[("details", &errors.first().cloned().unwrap_or_default())],
+      ));
+  }
+  // Если builds не пуст — errors игнорируются.
+Если упало одно зеркало из шести, а остальные ответили, пользователь
+получит неполный список без предупреждения. Если упало пять из шести —
+тоже неполный список, тоже без предупреждения.
+
+Проблема:
+Пользователь не знает, что в каталоге не хватает сборок из упавшего
+зеркала. Особенно критично для годовых архивов: если 2024 упал, целая
+эпоха версий исчезает молча.
+
+Что сделать:
+Вариант A (минимальный):
+  В Ev::Builds добавить поле warnings: Vec<String> или использовать
+  существующее error, но не как «всё плохо», а как «частично». В
+  App::pump показывать предупреждение в логе, а не как toast:
+    if let Some(warn) = &warnings { self.log(...); }
+  Требует изменения Ev::Builds.
+
+Вариант B (простой):
+  Логировать ошибки через progress.detail в fetch_all:
+    progress.detail(fill(
+        &pick("{count} зеркал недоступны", "{count} mirrors unavailable"),
+        &[("count", &errors.len().to_string())],
+    ));
+  Но detail в статус-баре виден только во время загрузки, потом пропадает.
+
+Рекомендация: вариант A, с добавлением поля warnings в Ev::Builds и
+записью в журнал в App::pump:
+  Ev::Builds { builds, fetched_at, error, warnings } => {
+      self.builds_loading = false;
+      if !builds.is_empty() {
+          self.set_builds(builds);
+          self.builds_loaded = true;
+          self.builds_error = None;
+          self.builds_fetched_at = Some(fetched_at);
+          for warn in warnings {
+              self.log(warn);
+          }
+      } else {
+          self.builds_error = error;
+      }
+  }
+
+Тест: не автоматизируется без сети.
+
+---
+
+## J8. .car принимается каталогом, но не распаковывается
+
+Файлы: src/builds.rs::fetch_item, src/installer.rs::detect_kind.
+
+Текущее:
+  if !matches!(ext.as_str(), "zip" | "rar" | "7z" | "car") {
+      continue;
+  }
+Каталог принимает .car архивы. detect_kind не знает .car и возвращает
+ArchiveKind::Unknown, extract_archive возвращает ошибку «Не удалось
+определить формат архива». Пользователь видит сборку в каталоге, нажимает
+«Установить», получает ошибку.
+
+Проблема:
+Каталог показывает сборку, которую невозможно установить. Это вводит в
+заблуждение.
+
+Что сделать:
+Вариант A (простой):
+  Убрать "car" из fetch_item. Такие сборки просто не попадут в каталог.
+  Если в будущем понадобится, добавить поддержку в detect_kind и extract_archive.
+
+Вариант B (лучше для пользователя):
+  Оставить в каталоге, но в карточке сборки показывать пометку «не
+  поддерживается» и блокировать кнопку «Создать сборку». Требует поля
+  в Build (например, supported: bool) или проверки format в UI.
+
+Рекомендация: вариант A. Если какая-то сборка существует только в .car,
+она всё равно не установится, и лучше не показывать её вовсе. Убрать
+"car" из matches!.
+
+Тест: юнит-тест на fetch_item с мок-данными сложен (нет мок-слоя для
+net::get_json). Достаточно, что detect_kind уже покрыт тестом
+detects_unknown_format.
+
+---
+
+## Известные ограничения (не в scope этих задач)
+
+Следующие проблемы известны, но их исправление — отдельный проект. Не
+трогать в рамках текущих задач.
+
+1. App — бог-объект (~55 полей). Разделение на AppState/UiState/JobState
+   — рефакторинг на несколько дней.
+2. .clone() в catalog_view/builds_view/installed_view на каждый кадр.
+   Работает, для 100 модов не заметно. Оптимизация — через Arc или
+   индексы — отдельная задача.
+3. Нумерация версий (2.1.0 → 2.1.5 без промежуточных). Решение владельца.
+4. ARCHIVE_ITEMS захардкожен. Если зеркало уйдёт — целая эпоха версий
+   исчезнет. Вынести в конфиг — отдельная задача.
+5. dist-сумма размеров сборок в u64. Не переполнится на реальных данных.
+6. Нет проверки контрольных сумм скачанных файлов. Осознанное решение
+   (SOP.txt раздел 14).
+7. Нет автообновления лаунчера. Non-goal (SOP.txt раздел 4.3).
+8. sort_groups пересортировывает на каждом кадре. Для 100 модов не
+   заметно, для 500 — заметно. Оптимизация — отдельная задача.
+9. DwmSetWindowAttribute 35/34/36 — только Windows 11. На Win10 меняется
+   только тёмный/светлый заголовок. Косметика, не код.
+10. Кэш обложек без лимита размера. Растёт неограниченно. Отдельная задача
+    (политика вытеснения).
+11. net::describe для Transport может выдать внутренний адрес прокси в
+    строке ошибки. Не критично, но видно в логах.
+12. Progress::stage сбрасывает file_index/file_total. При переходе
+    «скачивание → распаковка» счётчик пропадает и появляется снова.
+    Косметика.

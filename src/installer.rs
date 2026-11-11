@@ -300,22 +300,10 @@ fn subdirs(dir: &Path) -> Vec<PathBuf> {
 
 /// Находит настоящий корень игры внутри распакованного каталога.
 pub fn find_game_root(dir: &Path) -> PathBuf {
-    if has_game_marker(dir) {
-        return dir.to_path_buf();
-    }
-    // Глубина 1: иногда сборка лежит в единственной вложенной папке.
-    for child in subdirs(dir) {
-        if has_game_marker(&child) {
-            return child;
-        }
-    }
-    // Глубина 2: папка вида "YandereSimulator/YandereSimulator_Data".
-    for child in subdirs(dir) {
-        for grandchild in subdirs(&child) {
-            if has_game_marker(&grandchild) {
-                return grandchild;
-            }
-        }
+    // Вложенность бывает глубокой: образ → папка игры → ещё одна папка.
+    // Четырёх уровней хватает, а полный обход большого дерева не нужен.
+    if let Some(root) = find_marked_root(dir, 4) {
+        return root;
     }
     // Ничего не нашли — считаем корнем единственную папку (или сам каталог).
     let dirs = subdirs(dir);
@@ -329,6 +317,18 @@ pub fn find_game_root(dir: &Path) -> PathBuf {
     }
 }
 
+fn find_marked_root(dir: &Path, depth: usize) -> Option<PathBuf> {
+    if has_game_marker(dir) {
+        return Some(dir.to_path_buf());
+    }
+    if depth == 0 {
+        return None;
+    }
+    subdirs(dir)
+        .into_iter()
+        .find_map(|child| find_marked_root(&child, depth - 1))
+}
+
 /// Распаковывает архив сборки во временный каталог и переносит игру в `target`.
 pub fn install_game(
     archive: &Path,
@@ -337,15 +337,34 @@ pub fn install_game(
     progress: &Progress,
 ) -> Result<PathBuf, String> {
     remove_dir_quiet(staging);
-    progress.stage(pick("Распаковка архива", "Extracting the archive"));
-    extract_archive(archive, staging, progress)?;
+    let target_existed = target.exists();
+    let result = (|| -> Result<(), String> {
+        progress.stage(pick("Распаковка архива", "Extracting the archive"));
+        extract_archive(archive, staging, progress)?;
 
-    progress.stage(pick("Поиск файлов игры", "Looking for game files"));
-    let root = find_game_root(staging);
-    progress.stage(pick("Перенос файлов игры", "Moving game files"));
-    fs::create_dir_all(target).map_err(|e| format!("{}: {e}", target.display()))?;
-    move_contents(&root, target)?;
+        progress.stage(pick("Поиск файлов игры", "Looking for game files"));
+        let root = find_game_root(staging);
+        if !has_game_marker(&root) {
+            return Err(pick(
+                "В архиве не найдены файлы игры (YandereSimulator.exe)",
+                "No game files (YandereSimulator.exe) found in the archive",
+            )
+            .to_string());
+        }
+        progress.stage(pick("Перенос файлов игры", "Moving game files"));
+        fs::create_dir_all(target).map_err(|e| format!("{}: {e}", target.display()))?;
+        move_contents(&root, target)?;
+        Ok(())
+    })();
     remove_dir_quiet(staging);
+    if let Err(err) = result {
+        // Вызывающий проверяет target до установки, поэтому удаляем только то,
+        // что создал этот вызов.
+        if !target_existed {
+            remove_dir_quiet(target);
+        }
+        return Err(err);
+    }
     Ok(target.to_path_buf())
 }
 
@@ -672,6 +691,37 @@ mod tests {
         fs::create_dir_all(nested.join("YandereSimulator_Data")).unwrap();
         fs::write(nested.join("YandereSimulator.exe"), b"exe").unwrap();
         assert_eq!(find_game_root(&root), nested);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn finds_deeply_nested_game_root() {
+        let root = temp_dir("deep_root");
+        let game = root.join("a/b/c/YandereSimulator");
+        fs::create_dir_all(game.join("YandereSimulator_Data")).unwrap();
+        fs::write(game.join("YandereSimulator.exe"), b"exe").unwrap();
+        assert_eq!(find_game_root(&root), game);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn install_rejects_archive_without_game_and_removes_target() {
+        let root = temp_dir("no_game");
+        let archive = root.join("junk.zip");
+        {
+            let file = File::create(&archive).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("readme.txt", options).unwrap();
+            zip.write_all(b"not a game").unwrap();
+            zip.finish().unwrap();
+        }
+        let target = root.join("target");
+        let staging = root.join("staging");
+        let progress = Progress::new();
+        assert!(install_game(&archive, &target, &staging, &progress).is_err());
+        assert!(!target.exists());
+        assert!(!staging.exists());
         let _ = fs::remove_dir_all(root);
     }
 }

@@ -185,7 +185,7 @@ pub fn save_cache(cfg: &Config, builds: &[Build]) {
         builds: builds.to_vec(),
     };
     if let Ok(text) = serde_json::to_string(&cached) {
-        let _ = std::fs::write(cache_path(cfg), text);
+        let _ = crate::util::write_atomic(&cache_path(cfg), text);
     }
 }
 
@@ -429,7 +429,7 @@ fn fetch_item(item: &str, group: &str, source: &str) -> Result<Vec<Build>, Strin
 }
 
 /// Загружает полный каталог сборок со всех зеркал.
-pub fn fetch_all(progress: &Progress) -> Result<Vec<Build>, String> {
+pub fn fetch_all(progress: &Progress) -> Result<(Vec<Build>, Vec<String>), String> {
     let total = ARCHIVE_ITEMS.len();
     progress.stage(pick(
         "Загрузка каталога сборок",
@@ -507,7 +507,7 @@ pub fn fetch_all(progress: &Progress) -> Result<Vec<Build>, String> {
         (None, Some(_)) => std::cmp::Ordering::Greater,
         (None, None) => a.label.cmp(&b.label),
     });
-    Ok(final_list)
+    Ok((final_list, errors))
 }
 
 /// Возвращает кэш и признак того, что его стоит обновить.

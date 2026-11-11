@@ -446,7 +446,7 @@ pub fn save_cache(cfg: &Config, mods: &[ModGroup]) {
         mods: mods.to_vec(),
     };
     if let Ok(text) = serde_json::to_string(&cached) {
-        let _ = std::fs::write(cache_path(cfg), text);
+        let _ = crate::util::write_atomic(&cache_path(cfg), text);
     }
 }
 
@@ -498,7 +498,7 @@ fn jsdelivr_url() -> String {
 }
 
 /// Загружает каталог: список файлов, манифесты и скриншоты.
-pub fn fetch(progress: &Progress) -> Result<Vec<ModGroup>, String> {
+pub fn fetch(progress: &Progress) -> Result<(Vec<ModGroup>, Vec<String>), String> {
     progress.stage(pick("Загрузка каталога модов", "Loading the mod catalog"));
     progress.detail(pick("Поиск index.yaml", "Looking for index.yaml"));
 
@@ -518,7 +518,7 @@ pub fn fetch(progress: &Progress) -> Result<Vec<ModGroup>, String> {
 
     progress.stage(pick("Чтение манифестов", "Reading manifests"));
     progress.files(0, manifests.len());
-    let loaded = fetch_manifests(&manifests, progress)?;
+    let (loaded, warnings) = fetch_manifests(&manifests, progress)?;
 
     progress.stage(pick("Сборка каталога", "Building the catalog"));
     let mods = group_variants(&files, loaded);
@@ -529,7 +529,7 @@ pub fn fetch(progress: &Progress) -> Result<Vec<ModGroup>, String> {
         )
         .to_string());
     }
-    Ok(mods)
+    Ok((mods, warnings))
 }
 
 fn load_file_list(progress: &Progress) -> Result<Vec<String>, String> {
@@ -827,7 +827,7 @@ where
 fn fetch_manifests(
     manifests: &[String],
     progress: &Progress,
-) -> Result<Vec<(String, RawManifest, String)>, String> {
+) -> Result<(Vec<(String, RawManifest, String)>, Vec<String>), String> {
     let count = manifests.len();
     let next = AtomicUsize::new(0);
     let done = AtomicUsize::new(0);
@@ -875,7 +875,7 @@ fn fetch_manifests(
             pick("Манифесты не прочитаны", "Manifests were not read").to_string()
         }));
     }
-    Ok(loaded)
+    Ok((loaded, errors))
 }
 
 fn group_variants(files: &[String], loaded: Vec<(String, RawManifest, String)>) -> Vec<ModGroup> {
@@ -1643,7 +1643,7 @@ mod tests {
     #[ignore = "требует доступ в интернет"]
     fn real_catalog_loads() {
         let progress = Progress::new();
-        let list = fetch(&progress).expect("каталог должен загрузиться");
+        let (list, _) = fetch(&progress).expect("каталог должен загрузиться");
         assert!(!list.is_empty());
         for group in &list {
             assert!(!group.variants.is_empty());

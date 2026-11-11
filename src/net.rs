@@ -14,9 +14,14 @@ use crate::progress::Progress;
 pub const UA: &str = "YanLan/1.6 (Windows; Yandere Simulator launcher)";
 
 static PROXY: OnceLock<RwLock<Option<String>>> = OnceLock::new();
+static AGENT: OnceLock<RwLock<Option<ureq::Agent>>> = OnceLock::new();
 
 fn proxy_cell() -> &'static RwLock<Option<String>> {
     PROXY.get_or_init(|| RwLock::new(None))
+}
+
+fn agent_cell() -> &'static RwLock<Option<ureq::Agent>> {
+    AGENT.get_or_init(|| RwLock::new(None))
 }
 
 /// Задаёт прокси для всех сетевых запросов лаунчера. `None` — подключаться напрямую.
@@ -24,9 +29,26 @@ pub fn set_proxy(proxy: Option<String>) {
     if let Ok(mut guard) = proxy_cell().write() {
         *guard = proxy.filter(|p| !p.trim().is_empty());
     }
+    // Соединения старого агента идут через прежний прокси — начинаем заново.
+    if let Ok(mut guard) = agent_cell().write() {
+        *guard = None;
+    }
 }
 
 fn agent() -> ureq::Agent {
+    if let Ok(guard) = agent_cell().read() {
+        if let Some(agent) = guard.as_ref() {
+            return agent.clone();
+        }
+    }
+    let agent = build_agent();
+    if let Ok(mut guard) = agent_cell().write() {
+        *guard = Some(agent.clone());
+    }
+    agent
+}
+
+fn build_agent() -> ureq::Agent {
     let mut builder = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(30))
         .timeout_read(Duration::from_secs(90))

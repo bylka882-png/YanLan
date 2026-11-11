@@ -154,7 +154,7 @@ impl Config {
             let _ = std::fs::create_dir_all(parent);
         }
         if let Ok(text) = serde_json::to_string_pretty(self) {
-            let _ = std::fs::write(path, text);
+            let _ = crate::util::write_atomic(&path, text);
         }
     }
 

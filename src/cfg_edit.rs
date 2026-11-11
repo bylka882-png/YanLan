@@ -290,7 +290,7 @@ impl Editor {
 
     fn save(&mut self) -> Result<(), String> {
         if self.text_mode {
-            return std::fs::write(&self.path, &self.raw)
+            return crate::util::write_atomic(&self.path, &self.raw)
                 .map_err(|e| format!("{}: {e}", self.path.display()));
         }
         for setting in &self.settings {
@@ -301,10 +301,15 @@ impl Editor {
             let Some(pos) = line.find('=').into_iter().chain(line.find(':')).min() else {
                 continue;
             };
+            let after = &line[pos + 1..];
+            let spaced = after.starts_with(' ') || after.starts_with('\t');
             let head = line[..=pos].trim_end().to_string();
             let mut new_line = head;
             if !setting.value.is_empty() {
-                new_line.push(' ');
+                // Пробел после разделителя сохраняем как в исходном файле.
+                if spaced {
+                    new_line.push(' ');
+                }
                 new_line.push_str(&setting.value);
             }
             new_line.push_str(&setting.trailing);
@@ -314,7 +319,8 @@ impl Editor {
         if self.trailing_newline {
             text.push_str(&self.newline);
         }
-        std::fs::write(&self.path, text).map_err(|e| format!("{}: {e}", self.path.display()))?;
+        crate::util::write_atomic(&self.path, text)
+            .map_err(|e| format!("{}: {e}", self.path.display()))?;
         Ok(())
     }
 }
@@ -1158,7 +1164,19 @@ impl App {
             return;
         }
 
-        let rel = cfg.replace('\\', "/").trim_start_matches('/').to_string();
+        let Some(rel) = crate::util::safe_relative(&cfg) else {
+            self.toast(
+                fill(
+                    &pick(
+                        "Некорректный путь к настройкам: {path}",
+                        "Invalid settings path: {path}",
+                    ),
+                    &[("path", &cfg)],
+                ),
+                false,
+            );
+            return;
+        };
         let path = game.path.join(&rel);
         if !path.is_file() {
             self.toast(
@@ -1174,7 +1192,7 @@ impl App {
             return;
         }
 
-        match Editor::open(name, &rel, &path) {
+        match Editor::open(name, &rel.to_string_lossy(), &path) {
             Ok(editor) => self.mod_cfg = Some(editor),
             Err(err) => self.toast(err, false),
         }
@@ -1289,15 +1307,31 @@ Name = test
 
     #[test]
     fn colon_values_keep_no_space_on_save() {
-        let mut lines: Vec<String> = "UIColor:0.62,0,0,1\n".lines().map(str::to_string).collect();
-        let settings = parse(&lines);
-        assert_eq!(settings[0].kind, Kind::Color);
-        let pos = lines[0].find(':').unwrap();
-        let head = lines[0][..=pos].trim_end().to_string();
-        assert_eq!(format!("{head}0.5,0,0,1"), "UIColor:0.5,0,0,1");
-        // Значение через `=` осталось бы с пробелами, как в BepInEx.
-        lines[0] = format!("{head}{}", format_color(&[0.5, 0.0, 0.0, 1.0], 4));
-        assert_eq!(lines[0], "UIColor:0.5,0,0,1");
+        let dir = std::env::temp_dir().join(format!("yanlan_cfg_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Settings.txt");
+        std::fs::write(&path, "UIColor:0.62,0,0,1\nPosingMenu:F9\n").unwrap();
+        let mut editor = Editor::open("test", "Settings.txt", &path).unwrap();
+        editor.settings[0].value = "0.5,0,0,1".to_string();
+        editor.save().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text, "UIColor:0.5,0,0,1\nPosingMenu:F9\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_keeps_bepinex_spacing() {
+        let dir = std::env::temp_dir().join(format!("yanlan_cfg_eq_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("BepInEx.cfg");
+        std::fs::write(&path, "Enabled = true\n").unwrap();
+        let mut editor = Editor::open("test", "BepInEx.cfg", &path).unwrap();
+        editor.settings[0].value = "false".to_string();
+        editor.save().unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "Enabled = false\n");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -2,6 +2,7 @@
 
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::i18n::{fill, is_ru, pick};
@@ -278,6 +279,25 @@ pub fn strip_bom(text: &str) -> &str {
     text.trim_start_matches('\u{feff}')
 }
 
+static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Записывает файл атомарно: сначала во временный `<имя>.tmp`, затем rename.
+///
+/// Обрыв процесса посреди записи оставит мусорный tmp, но не обрежет сам файл.
+pub fn write_atomic(path: &Path, data: impl AsRef<[u8]>) -> std::io::Result<()> {
+    let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let tmp = path.with_file_name(format!("{name}.tmp{}-{seq}", std::process::id()));
+    let result = std::fs::write(&tmp, data).and_then(|()| std::fs::rename(&tmp, path));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
 /// Проверяет, что относительный путь не выходит за пределы базового каталога.
 pub fn safe_relative(rel: &str) -> Option<PathBuf> {
     let normalized = rel.replace('\\', "/");
@@ -467,6 +487,24 @@ mod tests {
             safe_relative("a\\b/c.txt"),
             Some(PathBuf::from("a/b/c.txt"))
         );
+    }
+
+    #[test]
+    fn atomic_write_replaces_and_leaves_no_tmp() {
+        let dir = std::env::temp_dir().join(format!("yanlan_atomic_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("data.json");
+        write_atomic(&path, "one").unwrap();
+        write_atomic(&path, "two").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "two");
+        let leftovers = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp"))
+            .count();
+        assert_eq!(leftovers, 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

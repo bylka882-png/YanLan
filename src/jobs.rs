@@ -10,7 +10,7 @@ use crate::builds::{self, Build};
 use crate::config::Config;
 use crate::i18n::{fill, pick};
 use crate::installer;
-use crate::library::{write_meta, GameInstall, GameMeta, InstalledMod, Library};
+use crate::library::{update_library, write_meta, GameInstall, GameMeta, InstalledMod, Library};
 use crate::mods::{self, ModVariant};
 use crate::net;
 use crate::progress::Progress;
@@ -141,7 +141,19 @@ pub fn fetch_builds(c: Ctx2, cfg: Config) -> Progress {
     let progress = Progress::new();
     let p = progress.clone();
     spawn_data(c, progress, move |c, p| match builds::fetch_all(p) {
-        Ok(list) => {
+        Ok((list, warnings)) => {
+            for warning in warnings.iter().take(3) {
+                c.log(fill(
+                    &pick("Зеркало пропущено: {err}", "Mirror skipped: {err}"),
+                    &[("err", warning)],
+                ));
+            }
+            if warnings.len() > 3 {
+                c.log(fill(
+                    &pick("Ещё {n} зеркал пропущено", "{n} more mirrors skipped"),
+                    &[("n", &(warnings.len() - 3).to_string())],
+                ));
+            }
             builds::save_cache(&cfg, &list);
             c.emit(Ev::Builds {
                 builds: list,
@@ -167,7 +179,19 @@ pub fn fetch_catalog(c: Ctx2, cfg: Config) -> Progress {
     let progress = Progress::new();
     let p = progress.clone();
     spawn_data(c, progress, move |c, p| match mods::fetch(p) {
-        Ok(list) => {
+        Ok((list, warnings)) => {
+            for warning in warnings.iter().take(3) {
+                c.log(fill(
+                    &pick("Манифест пропущен: {err}", "Manifest skipped: {err}"),
+                    &[("err", warning)],
+                ));
+            }
+            if warnings.len() > 3 {
+                c.log(fill(
+                    &pick("Ещё {n} манифестов пропущено", "{n} more manifests skipped"),
+                    &[("n", &(warnings.len() - 3).to_string())],
+                ));
+            }
             mods::save_cache(&cfg, &list);
             c.emit(Ev::Catalog {
                 mods: list,
@@ -198,23 +222,41 @@ pub struct Cover {
 /// Скачивает и декодирует один скриншот каталога в фоне.
 pub fn fetch_cover(c: Ctx2, cache_dir: std::path::PathBuf, key: String, url: String) {
     thread::spawn(move || {
-        let result = (|| -> Result<Cover, String> {
-            let dir = cache_dir.join("covers");
+        let dir = cache_dir.join("covers");
+        let file = dir.join(format!("{key}.img"));
+        let broken = dir.join(format!("{key}.broken"));
+        // Не декодировавшийся файл — это битые байты, сеть тут ни при чём:
+        // помечаем его, чтобы не качать заново при каждом запуске.
+        // `shortcut: метка живёт до очистки кэша; при обновлении картинки по
+        // тому же URL её нужно удалить вручную.`
+        let bytes = (|| -> Result<Vec<u8>, String> {
+            if broken.exists() {
+                return Err(format!("cover {key}: marked as broken"));
+            }
             std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-            let file = dir.join(format!("{key}.img"));
-            let bytes = if file.exists() {
-                std::fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))?
-            } else {
-                let bytes = net::get_bytes(&url)?;
-                let _ = std::fs::write(&file, &bytes);
-                bytes
-            };
-            decode_cover(&bytes, &key)
+            if file.exists() {
+                return std::fs::read(&file).map_err(|e| format!("{}: {e}", file.display()));
+            }
+            let bytes = net::get_bytes(&url)?;
+            let _ = std::fs::write(&file, &bytes);
+            Ok(bytes)
         })();
-        if result.is_err() {
-            // Битый кэш не должен мешать повторной попытке.
-            let _ = std::fs::remove_file(cache_dir.join("covers").join(format!("{key}.img")));
-        }
+        let result = match bytes {
+            Ok(bytes) => {
+                let decoded = decode_cover(&bytes, &key);
+                match &decoded {
+                    Ok(_) => {
+                        let _ = std::fs::remove_file(&broken);
+                    }
+                    Err(_) => {
+                        let _ = std::fs::remove_file(&file);
+                        let _ = std::fs::write(&broken, &url);
+                    }
+                }
+                decoded
+            }
+            Err(err) => Err(err),
+        };
         c.emit(Ev::Cover { key, result });
     });
 }
@@ -308,29 +350,27 @@ fn download_catalog(
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "archive".to_string());
-    let mut files: Vec<PathBuf> = Vec::new();
-    for (index, url) in parts.iter().enumerate() {
-        let part = cfg
-            .downloads_dir()
-            .join(format!("{stem}.part{}", index + 1));
-        progress.detail(fill(
-            &pick(
-                "{name} — том {index} из {total}",
-                "{name} — part {index} of {total}",
-            ),
-            &[
-                ("name", &filename),
-                ("index", &(index + 1).to_string()),
-                ("total", &parts.len().to_string()),
-            ],
-        ));
-        net::download(url, &part, progress, cfg.retry_forever)?;
-        files.push(part);
-    }
-
-    progress.stage(pick("Склейка томов", "Joining parts"));
-    progress.detail(&filename);
+    let files: Vec<PathBuf> = (1..=parts.len())
+        .map(|index| cfg.downloads_dir().join(format!("{stem}.part{index}")))
+        .collect();
     let joined = (|| -> Result<(), String> {
+        for (index, (url, part)) in parts.iter().zip(&files).enumerate() {
+            progress.detail(fill(
+                &pick(
+                    "{name} — том {index} из {total}",
+                    "{name} — part {index} of {total}",
+                ),
+                &[
+                    ("name", &filename),
+                    ("index", &(index + 1).to_string()),
+                    ("total", &parts.len().to_string()),
+                ],
+            ));
+            net::download(url, part, progress, cfg.retry_forever)?;
+        }
+
+        progress.stage(pick("Склейка томов", "Joining parts"));
+        progress.detail(&filename);
         let mut out = File::create(&dest).map_err(|e| format!("{}: {e}", dest.display()))?;
         for part in &files {
             let mut src = File::open(part).map_err(|e| format!("{}: {e}", part.display()))?;
@@ -340,6 +380,15 @@ fn download_catalog(
     })();
     if let Err(err) = joined {
         let _ = std::fs::remove_file(&dest);
+        // Отмена — не ошибка в данных: оставляем тома для докачки.
+        if !progress.is_cancelled() {
+            for part in &files {
+                let _ = std::fs::remove_file(part);
+                // Незавершённый том лежит как `<том>.part` (см. net::download).
+                let name = part.file_name().unwrap_or_default().to_string_lossy();
+                let _ = std::fs::remove_file(part.with_file_name(format!("{name}.part")));
+            }
+        }
         return Err(err);
     }
     if !cfg.keep_archives {
@@ -382,56 +431,87 @@ pub fn install_catalog_mods(
         }
         let total = items.len();
         let mut installed = Vec::new();
-        let mut library = Library::load(&cfg.root_dir);
 
-        for (index, variant) in items.iter().enumerate() {
-            if p.is_cancelled() {
-                return Err(pick("Установка отменена", "Installation cancelled").to_string());
-            }
-            p.stage(fill(
-                &pick(
-                    "Установка {name} ({index}/{total})",
-                    "Installing {name} ({index}/{total})",
-                ),
-                &[
-                    ("name", &variant.name),
-                    ("index", &(index + 1).to_string()),
-                    ("total", &total.to_string()),
-                ],
-            ));
-            if !variant.version.is_empty() {
-                p.detail(fill(
-                    &pick("версия {v}", "version {v}"),
-                    &[("v", &variant.version)],
+        let result = (|| -> Result<(), String> {
+            for (index, variant) in items.iter().enumerate() {
+                if p.is_cancelled() {
+                    return Err(pick("Установка отменена", "Installation cancelled").to_string());
+                }
+                p.stage(fill(
+                    &pick(
+                        "Установка {name} ({index}/{total})",
+                        "Installing {name} ({index}/{total})",
+                    ),
+                    &[
+                        ("name", &variant.name),
+                        ("index", &(index + 1).to_string()),
+                        ("total", &total.to_string()),
+                    ],
                 ));
+                if !variant.version.is_empty() {
+                    p.detail(fill(
+                        &pick("версия {v}", "version {v}"),
+                        &[("v", &variant.version)],
+                    ));
+                }
+                let archive = download_catalog(c, &cfg, variant, p)?;
+
+                // Ключ включает номер в очереди: установка нескольких модов
+                // за одну секунду не должна перетирать чужие резервные копии.
+                let key = format!("{}-{}-{}", sanitize_name(&variant.id), now_ts(), index);
+                let backup_dir = game.backups_dir().join(&key);
+                // У каждой задачи свой staging: параллельные установки в одну
+                // сборку не должны удалять каталоги друг друга.
+                let staging = game.work_dir().join(format!("tmp-{}", p.id()));
+                let files = installer::install_mod(&archive, &game.path, &backup_dir, &staging, p)?;
+
+                let mut item = InstalledMod::new(
+                    &variant.id,
+                    &variant.name,
+                    variant.ty.code(),
+                    &variant.author,
+                    &game.meta.id,
+                    files,
+                );
+                item.key = key;
+                item.cfg = variant.cfg.clone();
+                item.version = variant.version.clone();
+                if let Err(err) = update_library(&cfg.root_dir, |library| {
+                    library.add(item.clone());
+                    Ok(())
+                }) {
+                    // Файлы уже легли в игру, а запись не сохранилась — откат.
+                    let backup_dir = game.backups_dir().join(&item.key);
+                    let _ = installer::uninstall_mod(&game.path, &backup_dir, &item.files);
+                    return Err(err);
+                }
+
+                if !cfg.keep_archives {
+                    let _ = std::fs::remove_file(&archive);
+                }
+                installed.push(variant.name.clone());
             }
-            let archive = download_catalog(c, &cfg, variant, p)?;
+            Ok(())
+        })();
 
-            // Ключ включает номер в очереди: установка нескольких модов
-            // за одну секунду не должна перетирать чужие резервные копии.
-            let key = format!("{}-{}-{}", sanitize_name(&variant.id), now_ts(), index);
-            let backup_dir = game.backups_dir().join(&key);
-            let staging = game.work_dir().join("tmp");
-            let files = installer::install_mod(&archive, &game.path, &backup_dir, &staging, p)?;
-
-            let mut item = InstalledMod::new(
-                &variant.id,
-                &variant.name,
-                variant.ty.code(),
-                &variant.author,
-                &game.meta.id,
-                files,
-            );
-            item.key = key;
-            item.cfg = variant.cfg.clone();
-            item.version = variant.version.clone();
-            library.add(item);
-            library.save(&cfg.root_dir)?;
-
-            if !cfg.keep_archives {
-                let _ = std::fs::remove_file(&archive);
+        if let Err(err) = result {
+            if installed.is_empty() {
+                return Err(err);
             }
-            installed.push(variant.name.clone());
+            c.log(fill(
+                &pick(
+                    "Установка прервана. Уже установлено: {list}",
+                    "Installation interrupted. Already installed: {list}",
+                ),
+                &[("list", &installed.join(", "))],
+            ));
+            return Err(fill(
+                &pick(
+                    "Установка прервана. Уже установлено: {list}. {err}",
+                    "Installation interrupted. Already installed: {list}. {err}",
+                ),
+                &[("list", &installed.join(", ")), ("err", &err)],
+            ));
         }
 
         let names = installed.join(", ");
@@ -634,14 +714,19 @@ pub fn install_local_archive(
             .unwrap_or_else(|| pick("Локальный мод", "Local mod").to_string());
         let key = format!("{}-{}", sanitize_name(&name), now_ts());
         let backup_dir = game.backups_dir().join(&key);
-        let staging = game.work_dir().join("tmp");
+        let staging = game.work_dir().join(format!("tmp-{}", p.id()));
         p.stage(pick("Установка мода", "Installing mod"));
         let files = installer::install_mod(&archive, &game.path, &backup_dir, &staging, p)?;
         let mut item = InstalledMod::new(&name, &name, "mod", "", &game.meta.id, files);
         item.key = key;
-        let mut library = Library::load(&cfg.root_dir);
-        library.add(item);
-        library.save(&cfg.root_dir)?;
+        if let Err(err) = update_library(&cfg.root_dir, |library| {
+            library.add(item.clone());
+            Ok(())
+        }) {
+            let backup_dir = game.backups_dir().join(&item.key);
+            let _ = installer::uninstall_mod(&game.path, &backup_dir, &item.files);
+            return Err(err);
+        }
         c.log(fill(
             &pick(
                 "Установлен локальный архив {path}",
@@ -664,14 +749,20 @@ pub fn uninstall_mod(c: Ctx2, cfg: Config, game: GameInstall, key: String) -> Pr
     let progress = Progress::new();
     let p = progress.clone();
     spawn(c, progress, move |c, p| {
-        let mut library = Library::load(&cfg.root_dir);
-        let item = library
-            .remove(&key)
+        // Сначала убираем файлы: если это не удалось, запись в библиотеке
+        // должна остаться, иначе потеряются пути к резервным копиям.
+        let item = Library::load(&cfg.root_dir)
+            .mods
+            .into_iter()
+            .find(|m| m.key == key)
             .ok_or_else(|| pick("Запись о моде не найдена", "Mod record not found").to_string())?;
         p.stage(pick("Удаление мода", "Uninstalling mod"));
         let backup_dir = game.backups_dir().join(&item.key);
         installer::uninstall_mod(&game.path, &backup_dir, &item.files)?;
-        library.save(&cfg.root_dir)?;
+        update_library(&cfg.root_dir, |library| {
+            library.remove(&key);
+            Ok(())
+        })?;
         c.log(fill(
             &pick("Удалён мод «{name}»", "Mod “{name}” removed"),
             &[("name", &item.name)],
@@ -689,15 +780,6 @@ pub fn delete_game(c: Ctx2, cfg: Config, game: GameInstall) -> Progress {
     let p = progress.clone();
     spawn(c, progress, move |c, p| {
         p.stage(pick("Удаление сборки", "Deleting build"));
-        let mut library = Library::load(&cfg.root_dir);
-        let keys: Vec<String> = library
-            .for_game(&game.meta.id)
-            .map(|m| m.key.clone())
-            .collect();
-        for key in keys {
-            library.remove(&key);
-        }
-        library.save(&cfg.root_dir)?;
         std::fs::remove_dir_all(&game.path).map_err(|e| {
             fill(
                 &pick(
@@ -709,6 +791,17 @@ pub fn delete_game(c: Ctx2, cfg: Config, game: GameInstall) -> Progress {
                     ("err", &e.to_string()),
                 ],
             )
+        })?;
+        // Папки уже нет — теперь убираем её записи из библиотеки.
+        update_library(&cfg.root_dir, |library| {
+            let keys: Vec<String> = library
+                .for_game(&game.meta.id)
+                .map(|m| m.key.clone())
+                .collect();
+            for key in keys {
+                library.remove(&key);
+            }
+            Ok(())
         })?;
         let name = game.display_name();
         c.log(fill(

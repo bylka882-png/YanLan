@@ -96,13 +96,22 @@ impl LocalServer {
                 };
                 let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
                 let mut buffer = [0u8; 2048];
-                let _ = stream.read(&mut buffer);
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\
-                     Content-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    page.len(),
-                    page
-                );
+                let read = stream.read(&mut buffer).unwrap_or(0);
+                let request = String::from_utf8_lossy(&buffer[..read]);
+                let path = request.split_whitespace().nth(1).unwrap_or("/");
+                // Страница нужна только для iframe: favicon и прочее — 404.
+                let response = if path == "/" || path.starts_with("/?") {
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\
+                         Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        page.len(),
+                        page
+                    )
+                } else {
+                    "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\
+                     Connection: close\r\n\r\n"
+                        .to_string()
+                };
                 let _ = stream.write_all(response.as_bytes());
                 let _ = stream.flush();
             }

@@ -7,7 +7,7 @@ Document ID:            SOP-YL-001
 Revision:               2.0
 Date:                   2026-11-10
 Product:                YanLan (Cargo package name: YanLan)
-Product version:        2.2.1 (declared in Cargo.toml; compiled into the binary)
+Product version:        2.2.5 (declared in Cargo.toml; compiled into the binary)
 Platform:               Windows 10 / Windows 11, x64
 Owner:                  Archangel192028
 License:                Creative Commons Attribution-NonCommercial 4.0
@@ -88,7 +88,7 @@ Cover
 
 Staging directory
     A temporary extraction directory. Builds use <root>/games/.staging-<name>;
-    mods use <build>/.yanlan/tmp.
+    mods use <build>/.yanlan/tmp-<job id> so parallel installs do not collide.
 
 Backup set
     The directory <build>/.yanlan/backups/<mod key> that stores the original
@@ -411,6 +411,10 @@ Progress carries a monotonically increasing id. The UI stores progress_id and
 clears the status bar only for a matching JobDone event, which prevents a
 background task from erasing the progress of a foreground installation.
 
+When a user-initiated job starts while the status bar is busy, it is kept in a
+pending queue. The next unfinished queued job is promoted when the visible one
+finishes; the status bar shows the queue length as "+N in background".
+
 Job bodies are wrapped in catch_unwind so a panic becomes an error message
 instead of a silent thread failure. Note: the release profile sets
 panic = "abort", which disables unwinding and therefore also disables this
@@ -640,8 +644,9 @@ Multi-volume archives:
 Game root detection (install_game):
 - A directory containing yanderesimulator.exe, unityplayer.dll, or
   YandereSimulator_Data (case-insensitive) is the root.
-- Depth-1 and depth-2 subdirectories are checked.
-- If no marker exists, a single subdirectory with no sibling files is used.
+- Marked directories are searched breadth-first up to four levels deep.
+- If no marker exists, the archive is rejected as "not a game" and the target
+  build directory created by this call is removed.
 - The detected root's contents are moved into the target build directory.
 - The staging directory is removed afterwards.
 
@@ -653,7 +658,7 @@ Mod root detection (install_mod):
 - Otherwise the archive root is used.
 
 Mod installation:
-1. Extract to <build>/.yanlan/tmp.
+1. Extract to <build>/.yanlan/tmp-<job id>.
 2. Collect all files recursively with forward-slash relative paths.
 3. For each file:
    - If the target exists, copy the original to
@@ -682,6 +687,13 @@ Scanning:
 - The build size is computed recursively.
 - The mod count is the number of library records for that build id.
 - Results are sorted by build date descending, then installation time.
+
+Saving and loading:
+- library.json is written atomically through a temporary file and rename.
+- All read-modify-write updates take a process-wide lock, so parallel jobs
+  cannot overwrite each other's records.
+- If library.json cannot be parsed, it is renamed to
+  library.json.broken-<timestamp> and an empty library is used for the session.
 
 Executable selection:
 - The preferred game executable is yanderesimulator.exe; otherwise the first
@@ -780,6 +792,7 @@ UI:
 - URL: https://www.youtube.com/embed/<id> with autoplay, rel=0, modestbranding,
   and playsinline.
 - The server binds an ephemeral port and is stopped when the player is dropped.
+- Only "/" and "/?..." return the page; all other paths return 404.
 - Bounds are specified in physical pixels and recomputed every frame from the
   egui rectangle and the current pixels-per-point value.
 - The video panel is 72 percent of the screen width, clamped to 420-960 logical
@@ -816,7 +829,9 @@ background-colored outline. Up to ten videos are extracted per description.
 - paint_cover requests a repaint after that remaining interval, producing
   animation without a busy loop.
 - Failed downloads are added to a failure set so the launcher does not retry a
-  broken image every frame. A corrupt cache file is deleted on failure.
+  broken image every frame. A corrupt cache file is deleted on failure and a
+  <key>.broken marker prevents repeated downloads; the marker is removed when
+  decoding succeeds and cleared together with the cache.
 - Cover painting uses a center-crop scale that fills the target rectangle.
 
 8.11 Theme, fonts, and window chrome
@@ -970,8 +985,10 @@ Cover files:
 
 - A setting is identified by its line index in the original file.
 - On save, the line is rebuilt as:
-  <key text> "=" <space> <new value> <original inline comment>
-- The key text includes the original spacing before "=" only up to the "=".
+  <key text> "=" or ":" [<space>] <new value> <original inline comment>
+- The key text includes the original spacing before the separator.
+- The separator and the presence of whitespace after it are preserved, so Pose
+  Mod key:value lines stay compact and BepInEx key = value lines keep a space.
 - Blank lines, comments, section headers, and untouched settings are written
   exactly as read.
 - The original newline style and final-newline presence are restored.
@@ -1248,25 +1265,29 @@ Covered areas:
   and rejection of non-build names.
 - Unity generation mapping at boundary dates.
 - Proxy address parsing, including scheme detection and trimming.
-- Installer: signature detection, nested game-root discovery, ZIP mod install
-  and rollback, 7z extraction through sevenz-rust2, solid archives with empty
-  files, and multi-volume joining.
+- Installer: signature detection, nested and deeply nested game-root discovery,
+  rejection of archives without game files, ZIP mod install and rollback, 7z
+  extraction through sevenz-rust2, solid archives with empty files, and
+  multi-volume joining.
 - Library: PE bitness reading, Pose launcher selection by bitness, display-name
-  placeholder handling.
+  placeholder handling, concurrent updates without lost records, corrupt-file
+  quarantine.
 - Catalog: composite category parsing, folder-based category fallback,
   manifest numeric coercion, empty list handling, cfg backslash sanitization,
   ioa and dependency specs, YouTube link removal, compatibility expressions,
   index.yaml forms.
 - Configuration editor: BepInEx note interpretation, bool/choice/text/key/color
-  selection, True/False spelling preservation, Pose key:value parsing.
-- Utilities: path traversal rejection, human-readable sizes, Cyrillic directory
-  names, BOM stripping, date conversion, quoted argument splitting.
+  selection, True/False spelling preservation, Pose key:value parsing, and
+  separator spacing preservation on save.
+- Utilities: path traversal rejection, atomic file writes, human-readable
+  sizes, Cyrillic directory names, BOM stripping, date conversion, quoted
+  argument splitting.
 - Localization placeholder substitution.
 
 Execution:
   cargo test
 
-Current baseline: 40 passed, 1 ignored (2026-11-10, product version 2.2.1).
+Current baseline: 46 passed, 1 ignored (2026-11-11, product version 2.2.5).
 
 A nonzero exit code can occur in some consoles even when all tests pass because
 the test harness writes to stderr. The authoritative result is the "test result"
@@ -1512,7 +1533,7 @@ a third language requires a structural change to a key-based dictionary.
 6. Attach YanLan.exe, README.md, CHANGELOG.md, and LICENSE.md to the release.
 7. Verify the executable's embedded version and icon.
 
-Current versions: Cargo.toml 2.2.1, README 2.2.1, CHANGELOG 2.2.1.
+Current versions: Cargo.toml 2.2.5, README 2.2.5, CHANGELOG 2.2.5.
 
 17.6 Cache schema changes
 
@@ -1607,6 +1628,14 @@ Ownership rules:
 --------------------------------------------------------------------------------
 
 Date        Scope                                   Result
+2026-11-11  Data-safety and reliability fixes:      Passed. cargo test 46
+            atomic JSON writes, library lock,        passed, 1 ignored; release
+            corrupt-library quarantine, install      build succeeds; cargo
+            rollback, deep game-root search,         check reports no warnings.
+            multi-volume cleanup, shared HTTP
+            agent, pending-job queue, cfg path
+            check and colon spacing, 404 for
+            non-page player requests.
 2026-11-10  Multi-volume 7z (ChristmasParty),      Passed. 2.6 GB archive
             sevenz-rust2 extraction, progress      extracted in 30.6 s; 1823
                                                    files / 5.94 GB; result

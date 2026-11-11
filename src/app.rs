@@ -162,6 +162,8 @@ pub struct App {
     /// Номер задачи, прогресс которой сейчас показывается в статус-баре.
     pub progress_id: Option<u64>,
     pub job_title: Option<String>,
+    /// Задачи, ждущие свободного статус-бара.
+    pub pending_jobs: Vec<(String, Progress)>,
 
     pub show_create: bool,
     pub new_name: String,
@@ -253,6 +255,7 @@ impl App {
             progress: None,
             progress_id: None,
             job_title: None,
+            pending_jobs: Vec::new(),
             show_create: false,
             new_name: String::new(),
             new_version: None,
@@ -387,14 +390,27 @@ impl App {
 
     /// Запускает задачу, которая может идти параллельно с текущей.
     ///
-    /// Если статус-бар свободен, её прогресс показывается там; иначе задача
-    /// просто выполняется в фоне и сообщает о результате уведомлением.
+    /// Если статус-бар занят, задача ждёт в очереди и получает его, когда
+    /// предыдущая закончится.
     pub fn start_parallel_job(&mut self, title: impl Into<String>, progress: Progress) {
         let title = title.into();
         if self.progress.is_none() {
             self.begin_job(title, progress);
         } else {
-            self.log(title);
+            self.log(title.clone());
+            self.pending_jobs.push((title, progress));
+        }
+    }
+
+    /// Показывает следующую незавершённую задачу из очереди.
+    fn promote_job(&mut self) {
+        while !self.pending_jobs.is_empty() {
+            let (title, progress) = self.pending_jobs.remove(0);
+            if progress.snapshot().finished {
+                continue;
+            }
+            self.begin_job(title, progress);
+            return;
         }
     }
 
@@ -720,6 +736,7 @@ impl App {
                         self.progress = None;
                         self.progress_id = None;
                         self.job_title = None;
+                        self.promote_job();
                     }
                     self.reload_library();
                 }
@@ -956,6 +973,16 @@ impl App {
                     .strong()
                     .color(p.text),
                 );
+                if !self.pending_jobs.is_empty() {
+                    ui.label(
+                        RichText::new(fill(
+                            &pick("+{n} в фоне", "+{n} in background"),
+                            &[("n", &self.pending_jobs.len().to_string())],
+                        ))
+                        .size(11.0)
+                        .color(p.muted),
+                    );
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if w::soft(ui, pick("Отмена", "Cancel"), &p, !snap.cancelled).clicked() {
                         progress.cancel();
