@@ -1,0 +1,2030 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Каталог YanMod — YanLan</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #120a0f;
+    --panel: #1a0f16;
+    --card: #23131c;
+    --card-hover: #2d1823;
+    --border: #3a222e;
+    --accent: #ff4d8d;
+    --accent-dim: #c22f67;
+    --text: #f4e9ee;
+    --muted: #9e8692;
+    --green: #5ad68e;
+    --red: #f87171;
+    --radius: 9px;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    min-height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Comic Sans MS", "Segoe UI", Tahoma, sans-serif;
+    font-size: 14.5px;
+    line-height: 1.35;
+  }
+
+  ::selection { background: rgba(255, 77, 141, 0.35); }
+
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 9px;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: var(--accent-dim); }
+
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  button, input, select { font: inherit; }
+
+  .app {
+    width: 100%;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 18px 22px 36px;
+  }
+
+  .top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    flex-wrap: wrap;
+    min-height: 34px;
+  }
+
+  .top-left, .top-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .eyebrow {
+    font-size: 11px;
+    font-weight: bold;
+    letter-spacing: 0.02em;
+    color: var(--muted);
+    text-transform: uppercase;
+  }
+
+  .gh-link {
+    display: inline-flex;
+    align-items: center;
+    color: var(--muted);
+    margin-left: -2px;
+  }
+  .gh-link:hover { color: var(--accent); text-decoration: none; }
+  .gh-link svg { width: 16px; height: 16px; display: block; }
+
+  .meta {
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 32px;
+    padding: 5px 14px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--text);
+    font-size: 13.5px;
+    cursor: pointer;
+    transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+    white-space: nowrap;
+  }
+  .btn:hover:not(:disabled) {
+    background: var(--card-hover);
+    border-color: var(--accent-dim);
+  }
+  .btn:disabled {
+    color: var(--muted);
+    cursor: default;
+    opacity: 0.75;
+  }
+
+  .btn.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    font-size: 14px;
+    min-height: 34px;
+  }
+  .btn.primary:hover:not(:disabled) { background: #ff6a9d; border-color: #ff6a9d; }
+  .btn.primary:disabled { background: var(--card); border-color: var(--border); color: var(--muted); }
+
+  .control {
+    height: 32px;
+    padding: 0 10px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--text);
+    outline: none;
+    transition: border-color 0.12s ease, background 0.12s ease;
+  }
+  .control:hover { background: var(--card-hover); }
+  .control:focus { border-color: var(--accent-dim); }
+
+  select.control {
+    min-width: 150px;
+    cursor: pointer;
+  }
+
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 14px;
+  }
+
+  .search {
+    flex: 1 1 auto;
+    width: 100%;
+    min-width: 200px;
+    font-size: 14px;
+  }
+  .search::placeholder { color: var(--muted); }
+
+  .sort-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+  }
+  .sort-wrap .label { font-size: 11px; color: var(--muted); }
+  .sort-wrap select { min-width: 170px; }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 14px;
+  }
+
+  .chip {
+    height: 28px;
+    padding: 0 12px;
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--c);
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+  }
+  .chip:hover { background: var(--card-hover); border-color: var(--c); }
+  .chip.active { background: var(--c); border-color: var(--c); color: #fff; }
+
+  .divider {
+    height: 1px;
+    background: var(--border);
+    margin: 12px 0 0;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    margin-top: 12px;
+    align-items: stretch;
+  }
+
+  .card {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 12px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    cursor: pointer;
+    outline: none;
+    min-width: 0;
+    transition: border-color 0.12s ease, background 0.12s ease;
+  }
+  .card:hover { border-color: var(--accent-dim); }
+  .card:focus-visible { border-color: var(--accent); }
+
+  .cover {
+    position: relative;
+    flex: 0 0 auto;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    border-radius: 14px;
+    overflow: hidden;
+    background: var(--card-hover);
+  }
+  .cover img.art {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    border: 0;
+  }
+  .cover.fit img.art {
+    object-fit: contain;
+    padding: 11%;
+  }
+  .cover .placeholder {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    color: var(--ty, var(--muted));
+    opacity: 0.9;
+    user-select: none;
+  }
+  .cover .badge {
+    position: absolute;
+    left: 8px;
+    bottom: 8px;
+    width: clamp(40px, 18%, 104px);
+    height: clamp(40px, 18%, 104px);
+    object-fit: cover;
+    border-radius: 8px;
+    background: var(--card);
+    border: 2px solid var(--card);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+  }
+  .cover .play {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.14);
+    pointer-events: none;
+  }
+  .cover .play::after {
+    content: "";
+    width: 0;
+    height: 0;
+    border-left: 17px solid #fff;
+    border-top: 11px solid transparent;
+    border-bottom: 11px solid transparent;
+    margin-left: 6px;
+    filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.8));
+  }
+  .cover .play::before {
+    content: "";
+    position: absolute;
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.63);
+    border: 1.5px solid #fff;
+  }
+  .cover .play span {
+    position: relative;
+    z-index: 1;
+  }
+
+  .card-name {
+    margin-top: 7px;
+    font-size: 15px;
+    font-weight: bold;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text);
+  }
+
+  .card-author {
+    font-size: 10.5px;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .card-ioa {
+    font-size: 10px;
+    color: var(--accent-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .tags {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 5px;
+    margin-top: 2px;
+  }
+
+  .tag {
+    display: inline-flex;
+    align-items: center;
+    height: 18px;
+    padding: 0 7px;
+    border-radius: 4px;
+    border: 1px solid var(--stroke, var(--border));
+    background: var(--fill, var(--card-hover));
+    color: var(--c, var(--muted));
+    font-size: 10px;
+    white-space: nowrap;
+  }
+
+  .tag.big {
+    height: 22px;
+    padding: 0 8px;
+    font-size: 11px;
+    border-radius: 6px;
+  }
+
+  .card-desc {
+    flex: 1 1 auto;
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--muted);
+    white-space: pre-wrap;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 4;
+    -webkit-box-orient: vertical;
+    overflow-wrap: anywhere;
+  }
+
+  .card-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 8px;
+    min-height: 34px;
+  }
+
+  .note {
+    font-size: 10.5px;
+    color: var(--muted);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .note.red { color: var(--red); }
+
+  .footer-note {
+    margin-top: 24px;
+    font-size: 11px;
+    color: var(--muted);
+    text-align: center;
+  }
+
+  .status {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 58px 16px;
+    text-align: center;
+  }
+  .status-title { font-size: 15px; font-weight: bold; color: var(--text); }
+  .status-sub { font-size: 11.5px; color: var(--muted); max-width: 640px; overflow-wrap: anywhere; }
+
+  .spinner {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background: rgba(0, 0, 0, 0.58);
+    backdrop-filter: blur(2px);
+  }
+  .overlay[hidden] { display: none; }
+
+  .modal {
+    width: min(720px, 100%);
+    max-height: 88vh;
+    overflow-y: auto;
+    padding: 22px;
+    border-radius: 16px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.6);
+  }
+
+  .modal-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
+  }
+
+  .modal-title-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .modal-title {
+    margin: 0;
+    font-size: 20px;
+    font-weight: bold;
+    color: var(--text);
+  }
+
+  .modal-sub {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    flex-wrap: wrap;
+    margin-top: 3px;
+    font-size: 11.5px;
+    color: var(--muted);
+  }
+
+  .credit {
+    display: inline-flex;
+    align-items: center;
+    height: 20px;
+    padding: 0 7px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--accent);
+    font-size: 10px;
+  }
+  .credit:hover { border-color: var(--accent-dim); text-decoration: none; }
+
+  .close {
+    flex: 0 0 auto;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--muted);
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .close:hover { background: var(--card-hover); color: var(--text); border-color: var(--accent-dim); }
+
+  .detail-block { margin-top: 12px; }
+
+  .detail-cover {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    border-radius: 14px;
+    overflow: hidden;
+    position: relative;
+    background: var(--card-hover);
+  }
+
+  .shots {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+  }
+  .shot {
+    width: 82px;
+    height: 46px;
+    padding: 0;
+    border-radius: 6px;
+    border: 1.5px solid var(--border);
+    background: var(--card-hover);
+    overflow: hidden;
+    cursor: pointer;
+  }
+  .shot.active { border-color: var(--accent); }
+  .shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+  .section-title {
+    margin-top: 10px;
+    margin-bottom: 4px;
+    font-size: 11px;
+    font-weight: bold;
+    color: var(--muted);
+    letter-spacing: 0.02em;
+  }
+
+  .videos {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .video-thumb {
+    position: relative;
+    width: 220px;
+    max-width: 100%;
+    aspect-ratio: 16 / 9;
+    padding: 0;
+    border: 0;
+    border-radius: 14px;
+    overflow: hidden;
+    background: var(--card-hover);
+    cursor: pointer;
+  }
+  .video-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .video-thumb:hover { filter: brightness(1.08); }
+
+  .desc {
+    font-size: 12.5px;
+    color: var(--text);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    margin-top: 6px;
+  }
+  .desc.empty { color: var(--muted); font-size: 11.5px; }
+  pre.manifest {
+    margin: 6px 0 0;
+    padding: 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--text);
+    font-family: "Cascadia Mono", Consolas, monospace;
+    font-size: 11px;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 280px;
+    overflow: auto;
+  }
+
+  .meta-line {
+    margin-top: 8px;
+    font-size: 11px;
+    color: var(--muted);
+    overflow-wrap: anywhere;
+  }
+
+  .versions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+  }
+  .versions .eyebrow { flex: 0 0 auto; }
+  .versions select { flex: 1 1 320px; max-width: 460px; height: 32px; }
+
+  .modal-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+  }
+  .modal-actions .note { margin-left: auto; white-space: normal; }
+
+  .video-frame {
+    width: min(960px, 100%);
+    aspect-ratio: 16 / 9;
+    border-radius: 14px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    background: #000;
+    position: relative;
+  }
+  .video-frame iframe { width: 100%; height: 100%; border: 0; display: block; }
+  .video-shell { display: flex; flex-direction: column; gap: 10px; width: min(960px, 100%); }
+  .video-shell .video-head { display: flex; justify-content: flex-end; }
+
+  .toast {
+    position: fixed;
+    right: 18px;
+    bottom: 18px;
+    z-index: 80;
+    max-width: min(420px, calc(100vw - 36px));
+    padding: 10px 13px;
+    border-radius: 10px;
+    border: 1px solid var(--accent-dim);
+    background: var(--panel);
+    color: var(--text);
+    font-size: 12.5px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  }
+  .toast[hidden] { display: none; }
+
+  @media (max-width: 980px) {
+    .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 680px) {
+    .app { padding: 14px 14px 28px; }
+    .grid { grid-template-columns: 1fr; }
+    .toolbar { flex-direction: column; align-items: stretch; }
+    .sort-wrap { justify-content: flex-end; }
+    .sort-wrap select { flex: 1 1 auto; }
+    .top-right { width: 100%; }
+    .top-right .control { flex: 1 1 auto; }
+    .modal { padding: 16px; }
+    .modal-actions .note { margin-left: 0; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="top-left">
+      <span class="eyebrow">Каталог YanMod</span>
+      <a class="gh-link" href="https://github.com/bylka882-png/YanMod" target="_blank" rel="noopener" title="Открыть YanMod на GitHub" aria-label="Открыть YanMod на GitHub">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+      </a>
+      <span class="meta" id="catalogMeta">Загрузка каталога…</span>
+    </div>
+    <div class="top-right">
+      <button class="btn" id="refreshBtn" type="button" title="Обновить каталог">⟳ Обновить</button>
+      <span class="meta" for="buildSelect">Версия игры</span>
+      <select class="control" id="buildSelect" title="Проверять совместимость модов с выбранной версией игры">
+        <option value="">не выбрана</option>
+        <option value="U4">U4</option>
+        <option value="U5">U5</option>
+        <option value="U6">U6</option>
+        <option value="U17">U17</option>
+        <option value="U19">U19</option>
+        <option value="U20">U20</option>
+      </select>
+    </div>
+  </header>
+
+  <div class="toolbar">
+    <input class="control search" id="search" type="search" autocomplete="off" spellcheck="false" placeholder="Поиск по названию, автору, описанию…" aria-label="Поиск по каталогу">
+    <div class="sort-wrap">
+      <span class="label" for="sortSelect">Сортировка</span>
+      <select class="control" id="sortSelect" title="Сортировка каталога">
+        <option value="name">по названию</option>
+        <option value="compat">по совместимости</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="chips" id="chips"></div>
+  <div class="divider"></div>
+  <main class="grid" id="list" aria-live="polite"></main>
+
+  <div class="footer-note">Архивы скачиваются в папку загрузок браузера и не устанавливаются.</div>
+</div>
+
+<div class="overlay" id="detailsOverlay" hidden>
+  <div class="modal" id="detailsModal" role="dialog" aria-modal="true" aria-label="Подробности мода"></div>
+</div>
+
+<div class="overlay" id="videoOverlay" hidden>
+  <div class="video-shell">
+    <div class="video-head">
+      <button class="close" id="videoClose" type="button" title="Закрыть" aria-label="Закрыть">✕</button>
+    </div>
+    <div class="video-frame" id="videoFrame"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script>
+(function () {
+  "use strict";
+
+  const OWNER = "bylka882-png";
+  const REPO = "YanMod";
+  const BRANCH = "main";
+  const RAW = "https://raw.githubusercontent.com/" + OWNER + "/" + REPO + "/" + BRANCH + "/";
+  const TREE_URL = "https://api.github.com/repos/" + OWNER + "/" + REPO + "/git/trees/" + BRANCH + "?recursive=1";
+  const JSDELIVR_URL = "https://data.jsdelivr.com/v1/packages/gh/" + OWNER + "/" + REPO + "@" + BRANCH + "?structure=flat";
+  const CACHE_KEY = "yanmod-catalog-v1";
+  const CACHE_TTL = 6 * 3600 * 1000;
+
+  const TYPE_ORDER = ["PM", "Build", "TR", "ML", "Mod", "Plugin", "Translate"];
+  const TYPE_INFO = {
+    Mod: { code: "Mod", label: "Мод", color: "#FF7AA8" },
+    PM: { code: "PM", label: "Pose-мод", color: "#5AD68E" },
+    TR: { code: "TR", label: "Текстуры", color: "#C78AFC" },
+    ML: { code: "ML", label: "Загрузчик", color: "#62A8FF" },
+    Build: { code: "Build", label: "Сборка", color: "#FFB84D" },
+    Plugin: { code: "Plugin", label: "Плагин", color: "#FF8A65" },
+    Translate: { code: "Translate", label: "Перевод", color: "#5AD6D6" }
+  };
+  const TYPE_BY_WORD = {
+    mod: "Mod", patch: "Mod",
+    pm: "PM", posemod: "PM", "pose-mod": "PM", pose: "PM",
+    tr: "TR", texture: "TR", textures: "TR",
+    ml: "ML", loader: "ML",
+    build: "Build", builds: "Build",
+    plugin: "Plugin", plugins: "Plugin",
+    translate: "Translate", translation: "Translate", translations: "Translate"
+  };
+
+  const state = {
+    groups: [],
+    fetchedAt: null,
+    query: "",
+    section: null,
+    sort: "name",
+    build: "",
+    loading: false,
+    error: null,
+    progress: ""
+  };
+
+  const selected = {
+    id: null,
+    variant: 0,
+    shot: 0,
+    info: false,
+    scroll: 0
+  };
+
+  let toastTimer = 0;
+
+  const el = {
+    list: document.getElementById("list"),
+    chips: document.getElementById("chips"),
+    meta: document.getElementById("catalogMeta"),
+    search: document.getElementById("search"),
+    sort: document.getElementById("sortSelect"),
+    build: document.getElementById("buildSelect"),
+    refresh: document.getElementById("refreshBtn"),
+    detailsOverlay: document.getElementById("detailsOverlay"),
+    detailsModal: document.getElementById("detailsModal"),
+    videoOverlay: document.getElementById("videoOverlay"),
+    videoFrame: document.getElementById("videoFrame"),
+    videoClose: document.getElementById("videoClose"),
+    toast: document.getElementById("toast")
+  };
+
+  // ---------- Утилиты ----------
+
+  function esc(value) {
+    return String(value == null ? "" : value)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function escAttr(value) { return esc(value); }
+
+  function rgba(hex, alpha) {
+    const n = parseInt(hex.slice(1), 16);
+    return "rgba(" + ((n >> 16) & 255) + "," + ((n >> 8) & 255) + "," + (n & 255) + "," + alpha + ")";
+  }
+
+  function tagStyle(color) {
+    return "--c:" + color + ";--fill:" + rgba(color, 0.16) + ";--stroke:" + rgba(color, 0.5);
+  }
+
+  function formatTime(seconds) {
+    if (!seconds) return "";
+    const d = new Date(seconds * 1000);
+    const now = new Date();
+    const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+    const time = String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+    if (sameDay) return time;
+    return String(d.getDate()).padStart(2, "0") + "." + String(d.getMonth() + 1).padStart(2, "0") + " " + time;
+  }
+
+  function trimTo(text, limit) {
+    const chars = Array.from(String(text || ""));
+    if (chars.length <= limit) return chars.join("");
+    return chars.slice(0, limit).join("").trimEnd() + "…";
+  }
+
+  function rawUrl(path) {
+    return RAW + String(path).replace(/^\/+/, "").split("/").map(encodeURIComponent).join("/");
+  }
+
+  function toast(text) {
+    el.toast.textContent = text;
+    el.toast.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { el.toast.hidden = true; }, 4500);
+  }
+
+  // ---------- Разбор YAML ----------
+
+  function decodeDoubleQuoted(value) {
+    let out = "";
+    for (let i = 0; i < value.length; i++) {
+      const ch = value[i];
+      if (ch !== "\\") { out += ch; continue; }
+      const next = value[i + 1];
+      if (next === undefined) { out += "\\"; break; }
+      if (next === "n") { out += "\n"; i++; }
+      else if (next === "t") { out += "\t"; i++; }
+      else if (next === "r") { out += "\r"; i++; }
+      else if (next === '"' || next === "\\") { out += next; i++; }
+      // Неизвестная escape-последовательность (например, \c в путях cfg)
+      // остаётся как есть — так же её читает лаунчер.
+      else { out += "\\" + next; i++; }
+    }
+    return out;
+  }
+
+  function parseScalar(input) {
+    let text = String(input == null ? "" : input).trim();
+    if (!text) return "";
+    if (text[0] === '"') {
+      let out = "";
+      let i = 1;
+      for (; i < text.length; i++) {
+        const ch = text[i];
+        if (ch === "\\") {
+          const next = text[i + 1];
+          if (next === undefined) { out += "\\"; break; }
+          if (next === "n") { out += "\n"; i++; }
+          else if (next === "t") { out += "\t"; i++; }
+          else if (next === "r") { out += "\r"; i++; }
+          else if (next === '"' || next === "\\") { out += next; i++; }
+          else { out += "\\" + next; i++; }
+          continue;
+        }
+        if (ch === '"') break;
+        out += ch;
+      }
+      return out.trim();
+    }
+    if (text[0] === "'") {
+      let out = "";
+      let i = 1;
+      for (; i < text.length; i++) {
+        if (text[i] === "'") {
+          if (text[i + 1] === "'") { out += "'"; i++; continue; }
+          break;
+        }
+        out += text[i];
+      }
+      return out.trim();
+    }
+    // Комментарий начинается только с пробела перед #.
+    const hash = text.search(/\s#/);
+    if (hash >= 0) text = text.slice(0, hash);
+    return text.trim();
+  }
+
+  function parseInlineList(input) {
+    const text = String(input == null ? "" : input).trim();
+    if (!text.startsWith("[")) return null;
+    const end = text.indexOf("]");
+    if (end < 0) return null;
+    const body = text.slice(1, end);
+    const out = [];
+    let current = "";
+    let quote = "";
+    for (let i = 0; i < body.length; i++) {
+      const ch = body[i];
+      if (quote) {
+        current += ch;
+        if (ch === "\\" && quote === '"' && i + 1 < body.length) { current += body[++i]; continue; }
+        if (ch === quote) quote = "";
+        continue;
+      }
+      if (ch === '"' || ch === "'") { quote = ch; current += ch; continue; }
+      if (ch === ",") {
+        const value = parseScalar(current);
+        if (value) out.push(value);
+        current = "";
+        continue;
+      }
+      current += ch;
+    }
+    const value = parseScalar(current);
+    if (value) out.push(value);
+    return out;
+  }
+
+  function parseManifest(text) {
+    const raw = {
+      id: "", name: "", by: "", credits: "", v: "", gameV: "",
+      description: "", DL_url: "", type: "", cfg: "",
+      ioa: [], affected_files: [], dependencies: []
+    };
+    let currentList = null;
+    const lines = String(text || "").replace(/^\uFEFF/, "").split(/\r?\n/);
+    for (const line of lines) {
+      if (!line.trim() || /^\s*#/.test(line)) continue;
+
+      const item = line.match(/^\s*-\s*(.*)$/);
+      if (item && currentList) {
+        const value = parseScalar(item[1]);
+        if (value) currentList.push(value);
+        continue;
+      }
+
+      const pair = line.match(/^([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*)$/);
+      if (!pair) { currentList = null; continue; }
+      const key = pair[1];
+      const rest = pair[2];
+      currentList = null;
+
+      if (key === "ioa" || key === "affected_files" || key === "dependencies") {
+        const inline = parseInlineList(rest);
+        if (inline) {
+          raw[key] = inline;
+        } else {
+          const value = parseScalar(rest);
+          raw[key] = value ? [value] : [];
+          currentList = raw[key];
+        }
+        continue;
+      }
+      if (Object.prototype.hasOwnProperty.call(raw, key)) {
+        raw[key] = parseScalar(rest);
+      }
+    }
+    return raw;
+  }
+
+  // ---------- Модель каталога ----------
+
+  function parseTypes(value) {
+    const out = [];
+    for (const part of String(value || "").split(/[;,|/]/)) {
+      const ty = TYPE_BY_WORD[part.trim().toLowerCase()];
+      if (ty && !out.includes(ty)) out.push(ty);
+    }
+    return out;
+  }
+
+  function typeFromFolder(path) {
+    const first = String(path || "").split("/")[0].toLowerCase();
+    if (first === "pm" || first === "posemod" || first === "pose") return "PM";
+    if (first === "ml" || first === "loader") return "ML";
+    if (first === "build" || first === "builds") return "Build";
+    if (first === "tr" || first === "textures" || first === "texture") return "TR";
+    if (first === "plugin" || first === "plugins") return "Plugin";
+    if (first === "translate" || first === "translation" || first === "translations") return "Translate";
+    return "Mod";
+  }
+
+  function looksLikeVersion(text) {
+    return !!text && /\d/.test(text) && /^[0-9._-]+$/.test(text);
+  }
+
+  function deriveId(path, ty) {
+    const parts = String(path).split("/");
+    if (parts.length < 2) return "mod";
+    const folder = parts[parts.length - 2];
+    if (ty === "Build" || !looksLikeVersion(folder)) return folder;
+    if (parts.length >= 4) return parts[parts.length - 3];
+    return folder;
+  }
+
+  function numberParts(text) {
+    const found = String(text || "").match(/\d+/g);
+    return found ? found.map(Number) : [];
+  }
+
+  function compareNumberArrays(a, b) {
+    const length = Math.min(a.length, b.length);
+    for (let i = 0; i < length; i++) {
+      if (a[i] !== b[i]) return a[i] < b[i] ? -1 : 1;
+    }
+    return a.length === b.length ? 0 : (a.length < b.length ? -1 : 1);
+  }
+
+  function compareVersions(a, b) {
+    const numbers = compareNumberArrays(numberParts(a), numberParts(b));
+    if (numbers !== 0) return numbers;
+    const la = String(a).toLowerCase();
+    const lb = String(b).toLowerCase();
+    return la === lb ? 0 : (la < lb ? -1 : 1);
+  }
+
+  function typeListOfGroup(group) {
+    if (group.types && group.types.length) return group.types;
+    const out = [group.ty];
+    for (const variant of group.variants) {
+      for (const ty of typeListOfVariant(variant)) {
+        if (!out.includes(ty)) out.push(ty);
+      }
+    }
+    return out;
+  }
+
+  function typeListOfVariant(variant) {
+    return variant.types && variant.types.length ? variant.types : [variant.ty];
+  }
+
+  function isBuildGroup(group) {
+    return group.ty === "Build" || group.variants.some(v => v.ty === "Build" || typeListOfVariant(v).includes("Build"));
+  }
+
+  function isBuildVariant(variant) {
+    return variant.ty === "Build" || typeListOfVariant(variant).includes("Build");
+  }
+
+  function hasType(group, ty) {
+    if (group.ty === ty || (group.types || []).includes(ty)) return true;
+    return group.variants.some(v => typeListOfVariant(v).includes(ty));
+  }
+
+  function groupVariants(files, loaded) {
+    const shots = new Map();
+    const icons = new Map();
+
+    for (const file of files) {
+      const lower = file.toLowerCase();
+      if (!lower.endsWith(".webp") && !lower.endsWith(".gif") && !lower.endsWith(".png")) continue;
+      const slash = file.lastIndexOf("/");
+      if (slash < 0) continue;
+      const folder = file.slice(0, slash);
+      const name = file.slice(slash + 1).toLowerCase();
+      if (name === "ico.webp" || name === "icon.webp" || name === "ico.png") {
+        if (!icons.has(folder)) icons.set(folder, file);
+        continue;
+      }
+      if (lower.endsWith(".png")) continue;
+      if (!shots.has(folder)) shots.set(folder, []);
+      shots.get(folder).push(file);
+    }
+    for (const list of shots.values()) {
+      list.sort((a, b) => {
+        const n = compareNumberArrays(numberParts(a), numberParts(b));
+        return n !== 0 ? n : (a < b ? -1 : a > b ? 1 : 0);
+      });
+    }
+
+    const groups = [];
+    const indexById = new Map();
+
+    for (const entry of loaded) {
+      const path = entry.path;
+      const raw = entry.raw;
+      const folder = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+      const types = parseTypes(raw.type);
+      if (!types.length) types.push(typeFromFolder(path));
+      const ty = types[0];
+
+      let id = String(raw.id || "").trim();
+      if (!id) id = deriveId(path, ty);
+
+      let version = String(raw.v || "").trim();
+      if (!version) {
+        const folderName = folder.split("/").pop() || "";
+        if (looksLikeVersion(folderName)) version = folderName;
+      }
+
+      const name = String(raw.name || "").trim() || id;
+      const screenshots = shots.get(folder) || [];
+      const variant = {
+        id: id,
+        name: name,
+        author: String(raw.by || "").trim(),
+        credits: String(raw.credits || "").trim(),
+        version: version,
+        gameV: String(raw.gameV || "").trim(),
+        description: String(raw.description || "").trim(),
+        dlUrl: String(raw.DL_url || "").trim(),
+        ty: ty,
+        cfg: String(raw.cfg || "").trim(),
+        icon: icons.get(folder) || "",
+        ioa: Array.isArray(raw.ioa) ? raw.ioa.slice() : [],
+        types: types.slice(),
+        affectedFiles: Array.isArray(raw.affected_files) ? raw.affected_files.slice() : [],
+        dependencies: Array.isArray(raw.dependencies) ? raw.dependencies.slice() : [],
+        manifestPath: path,
+        manifestText: entry.text,
+        folder: folder,
+        screenshots: screenshots,
+        soon: !String(raw.DL_url || "").trim()
+      };
+
+      const position = indexById.get(id);
+      if (position !== undefined) {
+        const group = groups[position];
+        if (!group.author && variant.author) group.author = variant.author;
+        for (const extra of variant.types) {
+          if (!group.types.includes(extra)) group.types.push(extra);
+        }
+        group.variants.push(variant);
+      } else {
+        indexById.set(id, groups.length);
+        groups.push({
+          id: id,
+          name: name,
+          author: variant.author,
+          ty: ty,
+          types: types.slice(),
+          variants: [variant]
+        });
+      }
+    }
+
+    for (const group of groups) {
+      group.variants.sort((a, b) => compareVersions(b.version, a.version));
+      if (!group.name.trim()) group.name = group.id;
+      const first = group.variants[0];
+      if (first && group.name === group.id && first.name) group.name = first.name;
+    }
+    return groups;
+  }
+
+  // ---------- Совместимость ----------
+
+  function unityRankCode(text) {
+    const upper = String(text || "").trim().toUpperCase();
+    if (!upper.startsWith("U")) return null;
+    const number = Number(upper.slice(1));
+    if (!Number.isInteger(number)) return null;
+    if (number === 4) return 4;
+    if (number === 5) return 5;
+    if (number === 6) return 60;
+    if (number === 17 || number === 19 || number === 20) return number;
+    if (number >= 2017 && number <= 2035) return number - 2000;
+    return null;
+  }
+
+  function unityPeriod(text) {
+    const dash = String(text || "").split("-");
+    if (dash.length < 2) return null;
+    const left = unityRankCode(dash[0]);
+    const right = unityRankCode(dash.slice(1).join("-"));
+    if (left == null || right == null) return null;
+    return left <= right ? [left, right] : [right, left];
+  }
+
+  function normalizeDate(text) {
+    const parts = String(text || "").trim().split(/[.\-/]/).filter(Boolean);
+    if (parts.length < 2 || parts.length > 3) return null;
+    const year = Number(parts[0]);
+    if (!Number.isInteger(year) || year < 2000 || year > 2100) return null;
+    const month = Number(parts[1]);
+    if (!Number.isInteger(month) || month < 1 || month > 12) return null;
+    if (parts.length === 3) {
+      const day = Number(parts[2]);
+      if (!Number.isInteger(day) || day < 1 || day > 31) return null;
+      return [String(year).padStart(4, "0") + "-" + String(month).padStart(2, "0") + "-" + String(day).padStart(2, "0"), true];
+    }
+    return [String(year).padStart(4, "0") + "-" + String(month).padStart(2, "0") + "-01", false];
+  }
+
+  function parsePeriod(text) {
+    const dash = String(text || "").split("-");
+    if (dash.length < 2) return null;
+    const left = normalizeDate(dash[0]);
+    if (!left) return null;
+    const rightText = dash.slice(1).join("-");
+    let end;
+    if (/^\d{1,2}$/.test(rightText)) {
+      const month = Number(rightText);
+      if (month < 1 || month > 12) return null;
+      end = left[0].slice(0, 4) + "-" + String(month).padStart(2, "0") + "-01";
+    } else {
+      const right = normalizeDate(rightText);
+      if (!right) return null;
+      end = right[0];
+    }
+    return [left[0], end.slice(0, 8) + "31"];
+  }
+
+  function gameInfo() {
+    if (!state.build) return null;
+    return { version: state.build, unityRank: unityRankCode(state.build), date: null };
+  }
+
+  function compatOf(spec, game) {
+    if (!game) return "unknown";
+    const text = String(spec || "").trim();
+    if (!text || text.toLowerCase() === "own") return "unknown";
+
+    let op = null;
+    let rest = text;
+    if (rest.startsWith(">=")) { op = "ge"; rest = rest.slice(2).trim(); }
+    else if (rest.startsWith("<=")) { op = "le"; rest = rest.slice(2).trim(); }
+    if (!rest) return "unknown";
+    rest = rest.replace(/[–—]/g, "-").trim();
+
+    if (!op) {
+      const period = unityPeriod(rest);
+      if (period) {
+        if (game.unityRank == null) return "unknown";
+        return game.unityRank >= period[0] && game.unityRank <= period[1] ? "yes" : "no";
+      }
+    }
+
+    const want = unityRankCode(rest);
+    if (want != null) {
+      if (game.unityRank == null) return "unknown";
+      if (op === "ge") return game.unityRank >= want ? "yes" : "no";
+      if (op === "le") return game.unityRank <= want ? "yes" : "no";
+      return game.unityRank === want ? "yes" : "no";
+    }
+
+    const period = parsePeriod(rest);
+    if (period) {
+      if (!game.date) return "unknown";
+      return game.date >= period[0] && game.date <= period[1] ? "yes" : "no";
+    }
+
+    const date = normalizeDate(rest);
+    if (date) {
+      if (!game.date) return "unknown";
+      if (op === "ge") return game.date >= date[0] ? "yes" : "no";
+      if (op === "le") return game.date <= date[0] ? "yes" : "no";
+      if (date[1]) return game.date === date[0] ? "yes" : "no";
+      return game.date.startsWith(date[0].slice(0, 7)) ? "yes" : "no";
+    }
+
+    if (!game.version) return "unknown";
+    const order = compareVersions(game.version, rest);
+    if (op === "ge") return order >= 0 ? "yes" : "no";
+    if (op === "le") return order <= 0 ? "yes" : "no";
+    return order === 0 ? "yes" : "no";
+  }
+
+  function bestVariant(group, game) {
+    if (!game) return 0;
+    let unknown = null;
+    for (let i = 0; i < group.variants.length; i++) {
+      const compat = compatOf(group.variants[i].gameV, game);
+      if (compat === "yes") return i;
+      if (compat === "unknown" && unknown === null) unknown = i;
+    }
+    return unknown === null ? 0 : unknown;
+  }
+
+  function compatLabel(compat) {
+    if (compat === "yes") return ["подходит", "var(--green)"];
+    if (compat === "no") return ["не подходит", "var(--red)"];
+    return ["неизвестно", "var(--muted)"];
+  }
+
+  function compatRank(group, game) {
+    if (!game) return 1;
+    return compatOf(group.variants[bestVariant(group, game)].gameV, game) === "yes" ? 0
+      : compatOf(group.variants[bestVariant(group, game)].gameV, game) === "no" ? 2 : 1;
+  }
+
+  // ---------- Текст и ссылки ----------
+
+  function descriptionLocalized(variant) {
+    const parts = String(variant.description || "").split("|");
+    const ru = (parts[0] || "").trim();
+    const en = parts.length > 1 ? parts.slice(1).join("|").trim() : ru;
+    if (ru) return ru;
+    return en || "";
+  }
+
+  function stripYoutube(text) {
+    const re = /https?:\/\/(?:www\.)?(?:youtube\.com\/(?:watch\?(?:[^#\s]*?&)?v=|shorts\/|embed\/|live\/)|youtu\.be\/)[A-Za-z0-9_-]{11}(?:[?&][^\s]*)?/gi;
+    if (!re.test(text)) return String(text || "");
+    const lines = String(text || "").replace(re, "").split(/\r?\n/);
+    const cleaned = [];
+    for (let line of lines) {
+      line = line.replace(/\s+$/, "");
+      while (/[:<>\-—,]$/.test(line)) {
+        line = line.slice(0, -1).replace(/\s+$/, "");
+      }
+      const compact = line.replace(/ {2,}/g, " ");
+      cleaned.push(compact);
+    }
+    const out = [];
+    let blanks = 0;
+    for (const line of cleaned) {
+      if (!line.trim()) {
+        blanks++;
+        if (blanks > 1) continue;
+      } else {
+        blanks = 0;
+      }
+      out.push(line);
+    }
+    return out.join("\n").trim();
+  }
+
+  function descriptionText(variant) {
+    return stripYoutube(descriptionLocalized(variant));
+  }
+
+  function groupDescription(group) {
+    for (const variant of group.variants) {
+      const text = descriptionText(variant);
+      if (text) return text;
+    }
+    return "";
+  }
+
+  function youtubeIds(text) {
+    const re = /(?:youtube\.com\/(?:watch\?(?:[^#\s]*?&)?v=|shorts\/|embed\/|live\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/gi;
+    const out = [];
+    let match;
+    while ((match = re.exec(String(text || ""))) !== null) {
+      if (!out.includes(match[1])) out.push(match[1]);
+    }
+    return out;
+  }
+
+  function creditLinks(text) {
+    const re = /(?:https?:\/\/[^\s;,"'<>]+|(?:www\.)?(?:discord\.gg|discord\.com|youtube\.com|youtu\.be|github\.com|twitch\.tv|twitter\.com|x\.com|t\.me|boosty\.to|patreon\.com)\/[^\s;,"'<>]+)/gi;
+    const out = [];
+    let match;
+    while ((match = re.exec(String(text || ""))) !== null) {
+      let url = match[0].replace(/[.,;"'()!]+$/, "");
+      if (!url) continue;
+      const lower = url.toLowerCase();
+      let kind = "Ссылка";
+      if (lower.includes("discord.")) kind = "Discord";
+      else if (lower.includes("youtube.") || lower.includes("youtu.be")) kind = "YouTube";
+      else if (lower.includes("github.")) kind = "GitHub";
+      if (!/^https?:\/\//i.test(url)) url = "https://" + url;
+      out.push({ kind: kind, url: url });
+    }
+    return out;
+  }
+
+  function depSpec(dep) {
+    const parts = String(dep || "").split(";");
+    return { id: (parts[0] || "").trim(), version: (parts[1] || "").trim() };
+  }
+
+  function dlParts(url) {
+    const raw = String(url || "").trim();
+    if (!raw) return [];
+    const segments = raw.split(";").map(s => s.trim()).filter(Boolean);
+    if (!segments.length) return [];
+    const first = segments.shift();
+    const base = first.includes("/") ? first.slice(0, first.lastIndexOf("/")) : "";
+    const out = [first];
+    for (const name of segments) {
+      if (/^https?:\/\//i.test(name)) out.push(name);
+      else out.push(base + "/" + name.replace(/^\/+/, ""));
+    }
+    return out;
+  }
+
+  // ---------- Загрузка ----------
+
+  function loadCache(ignoreTtl) {
+    try {
+      const text = localStorage.getItem(CACHE_KEY);
+      if (!text) return null;
+      const cached = JSON.parse(text);
+      if (!cached || !Array.isArray(cached.mods) || !cached.mods.length) return null;
+      if (!ignoreTtl && Date.now() - Number(cached.fetched_at_ms || 0) > CACHE_TTL) return null;
+      return cached;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function saveCache() {
+    try {
+      localStorage.setItem(CACHE_KEY, JSON.stringify({
+        fetched_at_ms: Date.now(),
+        fetched_at: state.fetchedAt,
+        mods: state.groups
+      }));
+    } catch (_) {
+      // Кэш не обязателен: приватный режим и file:// могут запрещать storage.
+    }
+  }
+
+  async function fetchText(url) {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error("HTTP " + response.status + " · " + url);
+    return await response.text();
+  }
+
+  async function fetchFileList() {
+    try {
+      const response = await fetch(TREE_URL);
+      if (!response.ok) throw new Error("GitHub API: HTTP " + response.status);
+      const data = await response.json();
+      if (data.truncated) throw new Error("Список файлов GitHub обрезан");
+      if (!Array.isArray(data.tree)) throw new Error("GitHub API: пустой ответ");
+      return data.tree.filter(entry => entry.type === "blob").map(entry => entry.path);
+    } catch (first) {
+      try {
+        const response = await fetch(JSDELIVR_URL);
+        if (!response.ok) throw new Error("jsDelivr: HTTP " + response.status);
+        const data = await response.json();
+        return (data.files || []).map(file => String(file.name || "").replace(/^\/+/, "")).filter(Boolean);
+      } catch (second) {
+        throw new Error((first && first.message ? first.message : String(first)) + "; " + (second && second.message ? second.message : String(second)));
+      }
+    }
+  }
+
+  async function pool(items, limit, worker) {
+    let next = 0;
+    const count = Math.min(limit, items.length);
+    const runners = [];
+    for (let i = 0; i < count; i++) {
+      runners.push((async () => {
+        while (true) {
+          const index = next++;
+          if (index >= items.length) return;
+          await worker(items[index], index);
+        }
+      })());
+    }
+    await Promise.all(runners);
+  }
+
+  async function loadCatalog(force) {
+    if (state.loading) return;
+    state.loading = true;
+    state.error = null;
+    state.progress = "Список файлов…";
+    render();
+
+    try {
+      if (!force) {
+        const cached = loadCache(false);
+        if (cached) {
+          state.groups = cached.mods;
+          state.fetchedAt = Number(cached.fetched_at || 0);
+          state.loading = false;
+          render();
+          return;
+        }
+      }
+
+      const files = await fetchFileList();
+      const manifests = files.filter(path => path.toLowerCase().endsWith("/info.yaml"));
+      if (!manifests.length) throw new Error("В репозитории не найдено ни одного info.yaml");
+
+      state.progress = "Чтение манифестов 0/" + manifests.length;
+      render();
+
+      const loaded = [];
+      const errors = [];
+      let done = 0;
+      await pool(manifests, 6, async (path) => {
+        try {
+          const text = await fetchText(rawUrl(path));
+          loaded.push({ path: path, raw: parseManifest(text), text: text.replace(/^\uFEFF/, "") });
+        } catch (error) {
+          errors.push(path + ": " + (error && error.message ? error.message : String(error)));
+        }
+        done++;
+        state.progress = "Чтение манифестов " + done + "/" + manifests.length;
+        if (done % 5 === 0 || done === manifests.length) render();
+      });
+
+      if (!loaded.length) throw new Error(errors[0] || "Не удалось прочитать ни одного манифеста");
+
+      const order = new Map(manifests.map((path, index) => [path, index]));
+      loaded.sort((a, b) => (order.get(a.path) || 0) - (order.get(b.path) || 0));
+
+      state.groups = groupVariants(files, loaded);
+      state.fetchedAt = Math.floor(Date.now() / 1000);
+      state.loading = false;
+      state.progress = "";
+      saveCache();
+      render();
+      if (errors.length) toast("Пропущено манифестов: " + errors.length);
+    } catch (error) {
+      const cached = loadCache(true);
+      if (cached) {
+        state.groups = cached.mods;
+        state.fetchedAt = Number(cached.fetched_at || 0);
+        state.loading = false;
+        state.error = null;
+        render();
+        toast("Не удалось обновить каталог — показан сохранённый.");
+      } else {
+        state.loading = false;
+        state.error = error && error.message ? error.message : String(error);
+        render();
+      }
+    }
+  }
+
+  // ---------- Обложки ----------
+
+  function firstVideo(group, index) {
+    const variant = group.variants[index];
+    if (!variant) return null;
+    const ids = youtubeIds(variant.description);
+    return ids.length ? ids[0] : null;
+  }
+
+  function groupIcon(group, index) {
+    const variant = group.variants[index];
+    if (variant && variant.icon) return variant.icon;
+    for (const item of group.variants) {
+      if (item.icon) return item.icon;
+    }
+    return null;
+  }
+
+  function variantShots(group, index) {
+    const variant = group.variants[index];
+    if (variant && variant.screenshots.length) return variant.screenshots;
+    for (const item of group.variants) {
+      if (item.screenshots.length) return item.screenshots;
+    }
+    return [];
+  }
+
+  function coverMarkup(group, variantIndex, options) {
+    const opts = options || {};
+    const variant = group.variants[variantIndex];
+    const screenshot = opts.shot !== undefined ? opts.shot : (variant && variant.screenshots.length ? variant.screenshots[0] : null);
+    const video = opts.video !== undefined ? opts.video : firstVideo(group, variantIndex);
+    const icon = opts.icon !== undefined ? opts.icon : groupIcon(group, variantIndex);
+    const ty = (variant && variant.ty) || group.ty;
+    const info = TYPE_INFO[ty] || TYPE_INFO.Mod;
+    const placeholder = '<div class="placeholder" style="--ty:' + info.color + '">' + esc(info.code) + "</div>";
+    let art = "";
+    let fitted = false;
+    let covered = false;
+
+    if (screenshot) {
+      art = '<img class="art" src="' + escAttr(rawUrl(screenshot)) + '" alt="" loading="lazy" onerror="this.style.display=\'none\'">';
+      covered = true;
+    } else if (video) {
+      art = '<img class="art" src="' + escAttr("https://i.ytimg.com/vi/" + video + "/mqdefault.jpg") + '" alt="" loading="lazy" onerror="this.style.display=\'none\'">';
+      covered = true;
+    } else if (icon) {
+      art = '<img class="art" src="' + escAttr(rawUrl(icon)) + '" alt="" loading="lazy" onerror="this.style.display=\'none\'">';
+      fitted = true;
+    }
+
+    let badge = "";
+    if (covered && icon) {
+      badge = '<img class="badge" src="' + escAttr(rawUrl(icon)) + '" alt="" loading="lazy" onerror="this.style.display=\'none\'">';
+    }
+    const play = (opts.withPlay && video && !screenshot) ? '<div class="play"><span></span></div>' : "";
+    return '<div class="cover' + (fitted ? " fit" : "") + '" style="--ty:' + info.color + '">' + placeholder + art + badge + play + "</div>";
+  }
+
+  // ---------- Отрисовка каталога ----------
+
+  function matches(group, query) {
+    if (!query) return true;
+    let haystack = group.name + " " + group.id + " " + group.author + " " + group.ty;
+    for (const variant of group.variants) {
+      haystack += " " + variant.name + variant.author + variant.description + variant.version + variant.gameV + variant.folder + variant.dependencies.join(" ");
+    }
+    return haystack.toLowerCase().includes(query);
+  }
+
+  function sortGroups(list, game) {
+    if (state.sort === "compat") {
+      list.sort((a, b) => {
+        const rank = compatRank(a, game) - compatRank(b, game);
+        if (rank !== 0) return rank;
+        const an = a.name.toLowerCase();
+        const bn = b.name.toLowerCase();
+        return an === bn ? 0 : (an < bn ? -1 : 1);
+      });
+    } else {
+      list.sort((a, b) => {
+        const an = a.name.toLowerCase();
+        const bn = b.name.toLowerCase();
+        return an === bn ? 0 : (an < bn ? -1 : 1);
+      });
+    }
+  }
+
+  function renderChips(game) {
+    const query = state.query.trim().toLowerCase();
+    const matched = state.groups.filter(group => matches(group, query));
+    const counts = {};
+    for (const group of matched) {
+      for (const ty of typeListOfGroup(group)) counts[ty] = (counts[ty] || 0) + 1;
+    }
+
+    let html = '<button class="chip' + (state.section === null ? " active" : "") + '" data-section="" style="--c:var(--accent)">Все · ' + matched.length + "</button>";
+    for (const code of TYPE_ORDER) {
+      const info = TYPE_INFO[code];
+      const active = state.section === code ? " active" : "";
+      html += '<button class="chip' + active + '" data-section="' + code + '" style="--c:' + info.color + '" title="' + escAttr(info.label) + '">' + info.code + " · " + (counts[code] || 0) + "</button>";
+    }
+    el.chips.innerHTML = html;
+  }
+
+  function typeTagsHtml(types, big) {
+    return types.map(code => {
+      const info = TYPE_INFO[code];
+      return '<span class="tag' + (big ? " big" : "") + '" style="' + tagStyle(info.color) + '">' + esc(info.label) + "</span>";
+    }).join("");
+  }
+
+  function ioaText(variant) {
+    return variant.ioa.map(entry => {
+      const dep = depSpec(entry);
+      return dep.version ? dep.id + " " + dep.version : dep.id;
+    }).filter(Boolean).join(", ");
+  }
+
+  function cardHtml(group, game) {
+    const bestIndex = bestVariant(group, game);
+    const best = group.variants[bestIndex];
+    const build = isBuildGroup(group);
+    const compat = compatOf(best.gameV, game);
+    const types = typeListOfGroup(group).slice(0, 3);
+    const description = descriptionText(best) || groupDescription(group);
+    const author = group.author.trim() ? "by " + group.author : "автор неизвестен";
+    const included = build ? ioaText(best) : "";
+    const versionTag = best.version ? '<span class="tag" style="' + tagStyle("#9e8692") + '">v' + esc(trimTo(best.version, 12)) + "</span>" : "";
+    const compatTag = game && !build
+      ? (() => { const pair = compatLabel(compat); return '<span class="tag" style="' + tagStyle(pair[1]) + '">' + esc(pair[0]) + "</span>"; })()
+      : "";
+    const parts = dlParts(best.dlUrl);
+    const disabled = best.soon ? " disabled" : "";
+    const label = build ? "Скачать сборку" : "Скачать";
+    const note = best.soon ? "нет ссылки" : (parts.length > 1 ? parts.length + " тома" : "");
+    const noteClass = best.soon ? " note" : " note";
+    const desc = description
+      ? esc(trimTo(description, 150))
+      : '<span style="opacity:.8">Описание не добавлено</span>';
+
+    return '<article class="card" data-id="' + escAttr(group.id) + '" tabindex="0" aria-label="' + escAttr(group.name) + '">' +
+      coverMarkup(group, bestIndex) +
+      '<div class="card-name" title="' + escAttr(group.name) + '">' + esc(trimTo(group.name, 42)) + "</div>" +
+      '<div class="card-author" title="' + escAttr(group.author || "автор неизвестен") + '">' + esc(trimTo(author, 44)) + "</div>" +
+      (included ? '<div class="card-ioa" title="' + escAttr(included) + '">В этой сборке установлены: ' + esc(included) + "</div>" : "") +
+      '<div class="tags">' + typeTagsHtml(types, false) + versionTag + compatTag + "</div>" +
+      '<div class="card-desc">' + desc + "</div>" +
+      '<div class="card-footer">' +
+        '<span class="' + noteClass + '">' + esc(note) + "</span>" +
+        '<button class="btn primary" type="button" data-dl-group="' + escAttr(group.id) + '"' + disabled + ">" + label + "</button>" +
+      "</div>" +
+      "</article>";
+  }
+
+  function statusHtml() {
+    if (state.error) {
+      return '<div class="status">' +
+        '<div class="status-title">Не удалось загрузить каталог</div>' +
+        '<div class="status-sub">' + esc(state.error) + "</div>" +
+        '<button class="btn" type="button" data-retry>Повторить</button>' +
+        "</div>";
+    }
+    return '<div class="status"><div class="spinner"></div>' +
+      '<div class="status-title">Загрузка каталога YanMod</div>' +
+      '<div class="status-sub">' + esc(state.progress || "Список файлов…") + "</div></div>";
+  }
+
+  function render() {
+    if (state.fetchedAt) {
+      el.meta.textContent = state.groups.length + " модов · обновлено " + formatTime(state.fetchedAt);
+    } else if (state.loading) {
+      el.meta.textContent = "Загрузка каталога…";
+    } else if (state.error) {
+      el.meta.textContent = "Каталог недоступен";
+    } else {
+      el.meta.textContent = state.groups.length + " модов";
+    }
+
+    el.refresh.disabled = state.loading;
+    renderChips(gameInfo());
+
+    if (state.loading && !state.groups.length) {
+      el.list.innerHTML = statusHtml();
+      return;
+    }
+    if (state.error && !state.groups.length) {
+      el.list.innerHTML = statusHtml();
+      return;
+    }
+
+    const game = gameInfo();
+    const query = state.query.trim().toLowerCase();
+    const list = state.groups
+      .filter(group => state.section === null || hasType(group, state.section))
+      .filter(group => matches(group, query));
+    sortGroups(list, game);
+
+    if (!list.length) {
+      el.list.innerHTML = '<div class="status"><div class="status-title">Ничего не найдено</div>' +
+        '<div class="status-sub">Попробуйте другой запрос или раздел.</div></div>';
+      return;
+    }
+    el.list.innerHTML = list.map(group => cardHtml(group, game)).join("");
+  }
+
+  // ---------- Окно подробностей ----------
+
+  function groupById(id) {
+    return state.groups.find(group => group.id === id) || null;
+  }
+
+  function versionLabel(variant, game) {
+    let text = variant.version ? "v" + variant.version : variant.name;
+    if (variant.gameV) text += "  ·  " + variant.gameV;
+    if (!isBuildVariant(variant)) {
+      text += "  ·  " + compatLabel(compatOf(variant.gameV, game))[0];
+    }
+    if (variant.soon) text += "  ·  скоро";
+    return text;
+  }
+
+  function openDetails(id) {
+    const group = groupById(id);
+    if (!group) return;
+    selected.id = id;
+    selected.variant = bestVariant(group, gameInfo());
+    selected.shot = 0;
+    selected.info = false;
+    selected.scroll = 0;
+    renderDetails();
+    el.detailsOverlay.hidden = false;
+  }
+
+  function closeDetails() {
+    el.detailsOverlay.hidden = true;
+    selected.id = null;
+    el.detailsModal.innerHTML = "";
+  }
+
+  function renderDetails() {
+    if (!selected.id) return;
+    const group = groupById(selected.id);
+    if (!group) { closeDetails(); return; }
+    const game = gameInfo();
+    const index = Math.min(selected.variant, group.variants.length - 1);
+    selected.variant = index;
+    const variant = group.variants[index];
+    const shots = variantShots(group, index);
+    const shot = shots.length ? Math.min(selected.shot, shots.length - 1) : 0;
+    selected.shot = shot;
+    const build = isBuildVariant(variant);
+    const installedCompat = compatOf(variant.gameV, game);
+    const parts = dlParts(variant.dlUrl);
+    const credits = creditLinks(variant.credits);
+    const description = descriptionText(variant);
+    const videos = youtubeIds(variant.description).slice(0, 10);
+    const author = group.author.trim() ? "by " + group.author : "автор неизвестен";
+    const scroll = selected.scroll;
+
+    const cover = coverMarkup(group, index, {
+      shot: shots.length ? shots[shot] : null,
+      withPlay: true
+    });
+
+    const thumbs = shots.length > 1
+      ? '<div class="shots">' + shots.map((path, i) =>
+          '<button class="shot' + (i === shot ? " active" : "") + '" type="button" data-shot="' + i + '" title="Скриншот ' + (i + 1) + '">' +
+          '<img src="' + escAttr(rawUrl(path)) + '" alt="" loading="lazy" onerror="this.style.opacity=\'0\'"></button>'
+        ).join("") + "</div>"
+      : "";
+
+    const videoHtml = videos.length
+      ? '<div class="section-title">ВИДЕО ИЗ ОПИСАНИЯ</div><div class="videos">' +
+        videos.map(id => '<button class="video-thumb" type="button" data-video="' + escAttr(id) + '" title="Смотреть на YouTube">' +
+          '<img src="' + escAttr("https://i.ytimg.com/vi/" + id + "/mqdefault.jpg") + '" alt="" loading="lazy" onerror="this.style.opacity=\'0\'">' +
+          '<div class="play"><span></span></div></button>').join("") +
+        "</div>"
+      : "";
+
+    const descriptionHtml = selected.info
+      ? '<pre class="manifest">' + esc(variant.manifestText.trim() || "info.yaml ещё не загружен — обновите каталог модов.") + "</pre>"
+      : (description
+        ? '<div class="desc">' + esc(description) + "</div>"
+        : '<div class="desc empty">Описание не добавлено</div>');
+
+    const meta = [];
+    if (variant.version) meta.push("версия " + variant.version);
+    if (variant.gameV) meta.push("gameV: " + variant.gameV);
+    const metaHtml = meta.length ? '<div class="meta-line">' + esc(meta.join("  ·  ")) + "</div>" : "";
+
+    const depsHtml = variant.dependencies.length
+      ? '<div class="meta-line">Зависимости: ' + esc(variant.dependencies.join(", ")) + "</div>"
+      : "";
+
+    let affectedHtml = "";
+    if (variant.affectedFiles.length) {
+      const shown = variant.affectedFiles.slice(0, 6).join(", ");
+      const extra = variant.affectedFiles.length - 6;
+      affectedHtml = '<div class="meta-line">Заменяет файлы: ' + esc(shown) + (extra > 0 ? " и ещё " + extra : "") + "</div>";
+    }
+
+    const versionOptions = group.variants.map((item, i) =>
+      '<option value="' + i + '"' + (i === index ? " selected" : "") + ">" + esc(versionLabel(item, game)) + "</option>"
+    ).join("");
+
+    const buttonLabel = build ? "Скачать сборку" : "Скачать";
+    let note = "";
+    let noteClass = "note";
+    if (variant.soon) {
+      note = "Ссылка на архив ещё не добавлена";
+    } else if (parts.length > 1) {
+      note = "Архив из " + parts.length + " томов — скачаются все";
+    } else if (build) {
+      note = "Будет скачан архив сборки";
+    } else if (game) {
+      const pair = compatLabel(installedCompat);
+      note = pair[0];
+      if (installedCompat === "no") noteClass = "note red";
+    } else {
+      note = "Выберите версию игры, чтобы проверить совместимость";
+    }
+
+    const scrollBottom = !el.detailsOverlay.hidden;
+    el.detailsModal.innerHTML =
+      '<div class="modal-head">' +
+        '<div>' +
+          '<div class="modal-title-row"><h2 class="modal-title">' + esc(group.name) + "</h2>" + typeTagsHtml(typeListOfGroup(group).slice(0, 3), true) + "</div>" +
+          '<div class="modal-sub"><span>' + esc(author) + "</span>" +
+            credits.map(link => '<a class="credit" href="' + escAttr(link.url) + '" target="_blank" rel="noopener">' + esc(link.kind) + "</a>").join("") +
+          "</div>" +
+        "</div>" +
+        '<button class="close" type="button" data-close title="Закрыть" aria-label="Закрыть">✕</button>' +
+      "</div>" +
+      '<div class="detail-block">' + cover + thumbs + "</div>" +
+      videoHtml +
+      '<div class="detail-block"><button class="btn" type="button" data-info>' + (selected.info ? "Показать описание" : "Показать info.yaml") + "</button>" + descriptionHtml + "</div>" +
+      metaHtml + depsHtml + affectedHtml +
+      '<div class="versions"><span class="eyebrow">Версии · ' + group.variants.length + "</span>" +
+        '<select class="control" id="variantSelect" title="Версия мода">' + versionOptions + "</select></div>" +
+      '<div class="modal-actions">' +
+        '<button class="btn primary" type="button" data-dl-group="' + escAttr(group.id) + '" data-dl-variant="' + index + '"' + (variant.soon ? " disabled" : "") + ">" + buttonLabel + "</button>" +
+        '<button class="btn" type="button" data-close>Закрыть</button>' +
+        '<span class="' + noteClass + '">' + esc(note) + "</span>" +
+      "</div>";
+
+    el.detailsModal.scrollTop = scrollBottom ? scroll : 0;
+  }
+
+  // ---------- Видео ----------
+
+  function openVideo(id) {
+    el.videoFrame.innerHTML = '<iframe src="' + escAttr("https://www.youtube.com/embed/" + id + "?autoplay=1&rel=0&modestbranding=1&playsinline=1") + '" title="YouTube" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>';
+    el.videoOverlay.hidden = false;
+  }
+
+  function closeVideo() {
+    el.videoOverlay.hidden = true;
+    el.videoFrame.innerHTML = "";
+  }
+
+  // ---------- Скачивание ----------
+
+  function downloadVariant(variant) {
+    const parts = dlParts(variant.dlUrl);
+    if (!parts.length) {
+      toast("У этого варианта нет ссылки на скачивание.");
+      return;
+    }
+    for (const url of parts) {
+      const link = document.createElement("a");
+      link.href = url;
+      link.rel = "noopener";
+      link.style.display = "none";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    }
+    toast(parts.length > 1
+      ? "Скачивание " + parts.length + " томов. Если браузер спросит — разрешите несколько загрузок."
+      : "Архив скачивается в папку загрузок.");
+  }
+
+  function downloadFromButton(button) {
+    const id = button.getAttribute("data-dl-group");
+    const group = groupById(id);
+    if (!group) return;
+    const indexText = button.getAttribute("data-dl-variant");
+    const index = indexText === null || indexText === "" ? bestVariant(group, gameInfo()) : Number(indexText);
+    const variant = group.variants[index];
+    if (variant) downloadVariant(variant);
+  }
+
+  // ---------- События ----------
+
+  el.search.addEventListener("input", () => {
+    state.query = el.search.value;
+    render();
+  });
+
+  el.sort.addEventListener("change", () => {
+    state.sort = el.sort.value;
+    render();
+  });
+
+  el.build.addEventListener("change", () => {
+    state.build = el.build.value;
+    render();
+    if (selected.id) renderDetails();
+  });
+
+  el.refresh.addEventListener("click", () => {
+    loadCatalog(true);
+  });
+
+  el.videoClose.addEventListener("click", closeVideo);
+  el.videoOverlay.addEventListener("click", (event) => {
+    if (event.target === el.videoOverlay) closeVideo();
+  });
+
+  el.detailsOverlay.addEventListener("click", (event) => {
+    if (event.target === el.detailsOverlay) {
+      closeDetails();
+      return;
+    }
+    const close = event.target.closest("[data-close]");
+    if (close) { closeDetails(); return; }
+    const shot = event.target.closest("[data-shot]");
+    if (shot) {
+      selected.shot = Number(shot.getAttribute("data-shot"));
+      selected.scroll = el.detailsModal.scrollTop;
+      renderDetails();
+      return;
+    }
+    const info = event.target.closest("[data-info]");
+    if (info) {
+      selected.info = !selected.info;
+      selected.scroll = el.detailsModal.scrollTop;
+      renderDetails();
+      return;
+    }
+    const download = event.target.closest("[data-dl-group]");
+    if (download) {
+      downloadFromButton(download);
+      return;
+    }
+    const video = event.target.closest("[data-video]");
+    if (video) openVideo(video.getAttribute("data-video"));
+  });
+
+  el.detailsModal.addEventListener("change", (event) => {
+    if (event.target && event.target.id === "variantSelect") {
+      selected.variant = Number(event.target.value);
+      selected.shot = 0;
+      selected.scroll = 0;
+      renderDetails();
+    }
+  });
+
+  el.detailsModal.addEventListener("scroll", () => {
+    selected.scroll = el.detailsModal.scrollTop;
+  });
+
+  el.list.addEventListener("click", (event) => {
+    const download = event.target.closest("[data-dl-group]");
+    if (download) {
+      event.stopPropagation();
+      downloadFromButton(download);
+      return;
+    }
+    const retry = event.target.closest("[data-retry]");
+    if (retry) { loadCatalog(true); return; }
+    const card = event.target.closest(".card");
+    if (card) openDetails(card.getAttribute("data-id"));
+  });
+
+  el.list.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    const card = event.target.closest(".card");
+    if (card && event.target === card) {
+      event.preventDefault();
+      openDetails(card.getAttribute("data-id"));
+    }
+  });
+
+  el.chips.addEventListener("click", (event) => {
+    const chip = event.target.closest("[data-section]");
+    if (!chip) return;
+    const code = chip.getAttribute("data-section");
+    state.section = code ? (state.section === code ? null : code) : null;
+    render();
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    if (!el.videoOverlay.hidden) { closeVideo(); return; }
+    if (!el.detailsOverlay.hidden) closeDetails();
+  });
+
+  // ---------- Старт ----------
+
+  loadCatalog(false);
+})();
+</script>
+</body>
+  </html>
