@@ -23,6 +23,9 @@
 - Нераспознанная обложка помечается и не скачивается заново при каждом запуске.
 - Локальный сервер плеера отдаёт 404 на все пути, кроме страницы iframe.
 
+### Изменено
+- Лицензия проекта — PolyForm Noncommercial 1.0.0 вместо CC BY-NC 4.0; обновлены `LICENSE.md`, `Cargo.toml`, README и SOP.
+
 ### Проверки
 - `cargo fmt --all`, `cargo test` — 46 passed, 1 ignored.
 - `cargo build --release` — успешно.

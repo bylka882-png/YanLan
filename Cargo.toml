@@ -4,7 +4,7 @@ version = "2.2.5"
 edition = "2021"
 description = "Неофициальный лаунчер Yandere Simulator: отдельные сборки, моды и архив версий"
 authors = ["Archangel192028"]
-license = "CC-BY-NC-4.0"
+license = "PolyForm-Noncommercial-1.0.0"
 readme = "README.md"
 publish = false
 

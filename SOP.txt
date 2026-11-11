@@ -10,7 +10,7 @@ Product:                YanLan (Cargo package name: YanLan)
 Product version:        2.2.5 (declared in Cargo.toml; compiled into the binary)
 Platform:               Windows 10 / Windows 11, x64
 Owner:                  Archangel192028
-License:                Creative Commons Attribution-NonCommercial 4.0
+License:                PolyForm Noncommercial 1.0.0
 Status:                 Active
 
 --------------------------------------------------------------------------------
@@ -1559,7 +1559,7 @@ Repository fallback list    https://data.jsdelivr.com/v1/packages/gh/bylka882-pn
 YouTube thumbnail           https://i.ytimg.com/vi/<id>/mqdefault.jpg
 YouTube embed               https://www.youtube.com/embed/<id>
 YouTube watch fallback      https://www.youtube.com/watch?v=<id>
-License reference           https://creativecommons.org/licenses/by-nc/4.0/legalcode
+License reference           https://polyformproject.org/licenses/noncommercial/1.0.0
 
 Archive.org item identifiers:
 - yandere-simulator-2026-archive
