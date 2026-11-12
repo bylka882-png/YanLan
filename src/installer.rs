@@ -543,6 +543,158 @@ pub fn uninstall_mod(game_dir: &Path, backup_dir: &Path, files: &[ModFile]) -> R
     Ok(())
 }
 
+/// Итог неудачного переключения мода.
+#[derive(Debug)]
+pub struct ToggleFailure {
+    pub message: String,
+    /// Удалось вернуть мод в исходное состояние.
+    pub rolled_back: bool,
+}
+
+fn move_file(from: &Path, to: &Path) -> Result<(), String> {
+    if let Some(parent) = to.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    }
+    if to.exists() {
+        fs::remove_file(to).map_err(|e| format!("{}: {e}", to.display()))?;
+    }
+    fs::rename(from, to).map_err(|e| {
+        fill(
+            &pick(
+                "Не удалось переместить {path}: {err}",
+                "Failed to move {path}: {err}",
+            ),
+            &[
+                ("path", &from.display().to_string()),
+                ("err", &e.to_string()),
+            ],
+        )
+    })
+}
+
+fn invalid_path(path: &str) -> String {
+    fill(
+        &pick("Некорректный путь: {path}", "Invalid path: {path}"),
+        &[("path", path)],
+    )
+}
+
+/// Переставляет файлы одного мода между сборкой и `disabled`.
+///
+/// Повторный вызов в том же направлении безопасен и доделывает операцию,
+/// прерванную на середине.
+fn toggle_one(
+    enable: bool,
+    file: &ModFile,
+    game_dir: &Path,
+    backup_dir: &Path,
+    disabled_dir: &Path,
+) -> Result<(), String> {
+    let target = join_safe(game_dir, &file.path).ok_or_else(|| invalid_path(&file.path))?;
+    let stored = join_safe(disabled_dir, &file.path).ok_or_else(|| invalid_path(&file.path))?;
+    let original = join_safe(backup_dir, &file.path).ok_or_else(|| invalid_path(&file.path))?;
+
+    if enable {
+        if !stored.exists() {
+            return Ok(());
+        }
+        if file.replaced && target.exists() {
+            // Оригинал снова уходит в резерв, как было при установке.
+            move_file(&target, &original)?;
+        }
+        return move_file(&stored, &target);
+    }
+
+    if !stored.exists() {
+        if target.exists() {
+            if file.replaced && !original.exists() {
+                return Err(fill(
+                    &pick(
+                        "Нет резервной копии {path}: файл игры некуда вернуть",
+                        "No backup for {path}: the game file cannot be restored",
+                    ),
+                    &[("path", &file.path)],
+                ));
+            }
+            move_file(&target, &stored)?;
+        }
+    }
+    if file.replaced && !target.exists() && original.exists() {
+        move_file(&original, &target)?;
+    }
+    Ok(())
+}
+
+/// Включает или выключает мод без удаления и без повторного скачивания.
+///
+/// Файлы не копируются: `disabled` лежит внутри сборки, поэтому перестановка
+/// остаётся переименованием даже для модов на несколько гигабайт.
+pub fn set_mod_enabled(
+    game_dir: &Path,
+    backup_dir: &Path,
+    disabled_dir: &Path,
+    files: &[ModFile],
+    enable: bool,
+    progress: &Progress,
+) -> Result<(), ToggleFailure> {
+    let failure = |message: String| ToggleFailure {
+        message,
+        rolled_back: true,
+    };
+
+    // Сначала проверяем, что оригиналы на месте: иначе выключение оставит
+    // сборку без файлов, которые нечем восстановить.
+    if !enable {
+        for file in files {
+            if !file.replaced {
+                continue;
+            }
+            let stored = join_safe(disabled_dir, &file.path)
+                .ok_or_else(|| failure(invalid_path(&file.path)))?;
+            let target =
+                join_safe(game_dir, &file.path).ok_or_else(|| failure(invalid_path(&file.path)))?;
+            let original = join_safe(backup_dir, &file.path)
+                .ok_or_else(|| failure(invalid_path(&file.path)))?;
+            if !stored.exists() && target.exists() && !original.exists() {
+                return Err(failure(fill(
+                    &pick(
+                        "Нет резервной копии {path}: файл игры некуда вернуть",
+                        "No backup for {path}: the game file cannot be restored",
+                    ),
+                    &[("path", &file.path)],
+                )));
+            }
+        }
+    }
+
+    progress.total(files.len() as u64);
+    progress.set_done(0);
+    for (index, file) in files.iter().enumerate() {
+        if let Err(message) = toggle_one(enable, file, game_dir, backup_dir, disabled_dir) {
+            // Откат в исходное состояние. Если он не удался, запись мода
+            // останется с маркером `pending` и будет доделана при запуске.
+            let mut rolled_back = true;
+            for done in files.iter().rev() {
+                if toggle_one(!enable, done, game_dir, backup_dir, disabled_dir).is_err() {
+                    rolled_back = false;
+                }
+            }
+            return Err(ToggleFailure {
+                message,
+                rolled_back,
+            });
+        }
+        progress.set_done(index as u64 + 1);
+    }
+
+    if enable {
+        remove_dir_quiet(disabled_dir);
+    } else {
+        remove_empty_dirs(game_dir, 0);
+    }
+    Ok(())
+}
+
 fn remove_empty_dirs(dir: &Path, depth: usize) {
     if depth > 12 {
         return;
@@ -723,5 +875,114 @@ mod tests {
         assert!(!target.exists());
         assert!(!staging.exists());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn toggle_keeps_mod_files_in_disabled_dir() {
+        let root = temp_dir("toggle");
+        let game = root.join("game");
+        fs::create_dir_all(game.join("BepInEx/plugins")).unwrap();
+        fs::write(game.join("BepInEx/plugins/mod.dll"), b"mod").unwrap();
+        fs::write(game.join("added.txt"), b"added").unwrap();
+        let backup = root.join("backups/key");
+        fs::create_dir_all(backup.join("BepInEx/plugins")).unwrap();
+        fs::write(backup.join("BepInEx/plugins/mod.dll"), b"original").unwrap();
+        let disabled = root.join("disabled/key");
+        let files = vec![
+            ModFile {
+                path: "BepInEx/plugins/mod.dll".to_string(),
+                replaced: true,
+            },
+            ModFile {
+                path: "added.txt".to_string(),
+                replaced: false,
+            },
+        ];
+        let progress = Progress::new();
+
+        set_mod_enabled(&game, &backup, &disabled, &files, false, &progress).unwrap();
+        assert_eq!(
+            fs::read_to_string(game.join("BepInEx/plugins/mod.dll")).unwrap(),
+            "original"
+        );
+        assert!(!game.join("added.txt").exists());
+        assert_eq!(
+            fs::read_to_string(disabled.join("BepInEx/plugins/mod.dll")).unwrap(),
+            "mod"
+        );
+        assert_eq!(
+            fs::read_to_string(disabled.join("added.txt")).unwrap(),
+            "added"
+        );
+        assert!(!backup.join("BepInEx/plugins/mod.dll").exists());
+
+        set_mod_enabled(&game, &backup, &disabled, &files, true, &progress).unwrap();
+        assert_eq!(
+            fs::read_to_string(game.join("BepInEx/plugins/mod.dll")).unwrap(),
+            "mod"
+        );
+        assert_eq!(fs::read_to_string(game.join("added.txt")).unwrap(), "added");
+        assert_eq!(
+            fs::read_to_string(backup.join("BepInEx/plugins/mod.dll")).unwrap(),
+            "original"
+        );
+        assert!(!disabled.exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn toggle_refuses_without_backup_and_keeps_game_files() {
+        let root = temp_dir("toggle_nobackup");
+        let game = root.join("game");
+        fs::create_dir_all(&game).unwrap();
+        fs::write(game.join("mod.dll"), b"mod").unwrap();
+        let backup = root.join("backups/key");
+        let disabled = root.join("disabled/key");
+        let files = vec![ModFile {
+            path: "mod.dll".to_string(),
+            replaced: true,
+        }];
+        let progress = Progress::new();
+
+        let failure =
+            set_mod_enabled(&game, &backup, &disabled, &files, false, &progress).unwrap_err();
+        assert!(failure.rolled_back);
+        assert_eq!(fs::read_to_string(game.join("mod.dll")).unwrap(), "mod");
+        assert!(!disabled.exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn toggle_repairs_interrupted_disable() {
+        let root = temp_dir("toggle_repair");
+        let game = root.join("game");
+        fs::create_dir_all(&game).unwrap();
+        let backup = root.join("backups/key");
+        let disabled = root.join("disabled/key");
+        fs::create_dir_all(&backup).unwrap();
+        fs::create_dir_all(&disabled).unwrap();
+        // Так выглядит обрыв после первого шага: файл мода уже убран,
+        // оригинал ещё не возвращён.
+        fs::write(disabled.join("mod.dll"), b"mod").unwrap();
+        fs::write(backup.join("mod.dll"), b"original").unwrap();
+        let files = vec![ModFile {
+            path: "mod.dll".to_string(),
+            replaced: true,
+        }];
+        let progress = Progress::new();
+
+        set_mod_enabled(&game, &backup, &disabled, &files, false, &progress).unwrap();
+        assert_eq!(
+            fs::read_to_string(game.join("mod.dll")).unwrap(),
+            "original"
+        );
+
+        set_mod_enabled(&game, &backup, &disabled, &files, true, &progress).unwrap();
+        assert_eq!(fs::read_to_string(game.join("mod.dll")).unwrap(), "mod");
+        assert_eq!(
+            fs::read_to_string(backup.join("mod.dll")).unwrap(),
+            "original"
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 }

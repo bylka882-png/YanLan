@@ -10,7 +10,7 @@ use crate::builds::{self, Build};
 use crate::config::{Config, ProxyKind};
 use crate::i18n::{fill, pick};
 use crate::jobs::{self, Ev};
-use crate::library::{GameInstall, Library};
+use crate::library::{update_library, GameInstall, Library};
 use crate::mods::{self, ModGroup, ModType, ModVariant};
 use crate::progress::Progress;
 use crate::runner;
@@ -284,6 +284,7 @@ impl App {
         };
 
         app.reload_library();
+        app.recover_pending_toggles();
 
         if let Some(cache) = builds::load_cache(&app.cfg) {
             app.set_builds(cache.builds);
@@ -343,6 +344,68 @@ impl App {
             if !self.games.iter().any(|g| &g.meta.id == selected) {
                 self.selected_game = self.games.first().map(|g| g.meta.id.clone());
             }
+        }
+    }
+
+    /// Доделывает переключения модов, прерванные закрытием лаунчера.
+    ///
+    /// Обычно это одна-две операции переименования, поэтому запуск не ждёт.
+    pub fn recover_pending_toggles(&mut self) {
+        let pending: Vec<(String, String, bool)> = self
+            .library
+            .mods
+            .iter()
+            .filter_map(|m| {
+                m.pending
+                    .map(|want| (m.key.clone(), m.game_id.clone(), want))
+            })
+            .collect();
+        let mut changed = false;
+        for (key, game_id, enable) in pending {
+            let Some(game) = self.games.iter().find(|g| g.meta.id == game_id).cloned() else {
+                continue;
+            };
+            let Some(item) = self.library.mods.iter().find(|m| m.key == key).cloned() else {
+                continue;
+            };
+            let progress = Progress::new();
+            let result = crate::installer::set_mod_enabled(
+                &game.path,
+                &game.backups_dir().join(&key),
+                &game.disabled_dir(&key),
+                &item.files,
+                enable,
+                &progress,
+            );
+            match result {
+                Ok(()) => {
+                    let _ = update_library(&self.cfg.root_dir, |library| {
+                        if let Some(record) = library.mods.iter_mut().find(|m| m.key == key) {
+                            record.enabled = enable;
+                            record.pending = None;
+                        }
+                        Ok(())
+                    });
+                    changed = true;
+                }
+                Err(failure) => {
+                    self.log(failure.message.clone());
+                    self.toast(failure.message, false);
+                    if failure.rolled_back {
+                        // Файлы вернулись в исходное состояние — маркер снимаем.
+                        let _ = update_library(&self.cfg.root_dir, |library| {
+                            if let Some(record) = library.mods.iter_mut().find(|m| m.key == key) {
+                                record.pending = None;
+                            }
+                            Ok(())
+                        });
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if changed {
+            self.reload_library();
         }
     }
 

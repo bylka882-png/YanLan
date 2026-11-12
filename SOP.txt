@@ -4,10 +4,10 @@ STANDARD OPERATING PROCEDURE AND ENGINEERING REFERENCE
 ================================================================================
 
 Document ID:            SOP-YL-001
-Revision:               2.0
-Date:                   2026-11-10
+Revision:               2.1
+Date:                   2026-11-12
 Product:                YanLan (Cargo package name: YanLan)
-Product version:        2.2.5 (declared in Cargo.toml; compiled into the binary)
+Product version:        2.3.0 (declared in Cargo.toml; compiled into the binary)
 Platform:               Windows 10 / Windows 11, x64
 Owner:                  Archangel192028
 License:                PolyForm Noncommercial 1.0.0
@@ -677,6 +677,30 @@ Rollback (uninstall_mod):
 - Empty directories under the build are pruned up to depth 12, excluding
   .yanlan.
 
+Mod toggle (set_mod_enabled):
+- Disabling a mod moves its files instead of copying them: the current version
+  goes to <build>/.yanlan/disabled/<key>/<relative path>, and the original from
+  .yanlan/backups/<key> is moved back into the build.
+- Enabling reverses the moves: the original returns to the backup set and the
+  mod file returns to the build.
+- Because .yanlan is inside the build folder, both directions are renames on the
+  same volume and stay fast for mods with thousands of files or gigabytes of
+  data.
+- Before disabling, every replaced file must have a backup; otherwise the
+  operation is refused and nothing is touched.
+- Each per-file step is idempotent in both directions, so a repeated call
+  completes an interrupted operation.
+- If a file step fails, the processed files are rolled back in reverse order.
+  When the rollback also fails, the library record keeps pending = true|false
+  and the operation is retried at the next launch.
+- A mod is not toggled when another enabled mod in the same build uses any of
+  its file paths (library::path_conflicts); the user is asked to turn that mod
+  off first.
+- Toggling is serialized by a process-wide lock, so a double click cannot start
+  two rearrangements of the same files.
+- Removing a disabled mod only deletes the record and .yanlan/disabled/<key>;
+  the build already contains the original files.
+
 8.7 Library and build scanning (src/library.rs)
 
 Scanning:
@@ -720,6 +744,8 @@ Unity label:
 8.8 Mod configuration editor (src/cfg_edit.rs)
 
 Entry point:
+- The switch on an installed-mod row toggles the mod without removing it; the
+  bundled mods shipped inside a build have no switch.
 - The gear button on an installed-mod row calls open_mod_cfg with the build id,
   mod id, display name, and cfg path.
 - The cfg path is taken from the library record. If the record has no cfg
@@ -884,6 +910,7 @@ background-colored outline. Up to ten videos are extracted per description.
 │  │  ├─ .yanlan.json               Build metadata
 │  │  └─ .yanlan/
 │  │     ├─ backups/<mod key>/      Original files replaced by a mod
+│  │     ├─ disabled/<mod key>/     Files of a turned-off mod
 │  │     └─ tmp/                    Mod staging directory
 │  └─ .staging-<name>/              Build staging (temporary)
 ├─ downloads/                       Retained archives, if enabled

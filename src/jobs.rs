@@ -4,6 +4,7 @@ use std::fs::File;
 use std::io::copy;
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
+use std::sync::Mutex;
 use std::thread;
 
 use crate::builds::{self, Build};
@@ -759,6 +760,8 @@ pub fn uninstall_mod(c: Ctx2, cfg: Config, game: GameInstall, key: String) -> Pr
         p.stage(pick("Удаление мода", "Uninstalling mod"));
         let backup_dir = game.backups_dir().join(&item.key);
         installer::uninstall_mod(&game.path, &backup_dir, &item.files)?;
+        // У выключенного мода файлы лежат не в сборке, а здесь.
+        let _ = std::fs::remove_dir_all(game.disabled_dir(&item.key));
         update_library(&cfg.root_dir, |library| {
             library.remove(&key);
             Ok(())
@@ -770,6 +773,122 @@ pub fn uninstall_mod(c: Ctx2, cfg: Config, game: GameInstall, key: String) -> Pr
         Ok(fill(
             &pick("«{name}» удалён", "“{name}” removed"),
             &[("name", &item.name)],
+        ))
+    });
+    p
+}
+
+/// Переключение выполняется по одному: двойной щелчок не должен запускать
+/// две перестановки одних и тех же файлов.
+static TOGGLE_LOCK: Mutex<()> = Mutex::new(());
+
+pub fn set_mod_enabled(
+    c: Ctx2,
+    cfg: Config,
+    game: GameInstall,
+    key: String,
+    enable: bool,
+) -> Progress {
+    let progress = Progress::new();
+    let p = progress.clone();
+    spawn(c, progress, move |c, p| {
+        let _guard = TOGGLE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let library = Library::load(&cfg.root_dir);
+        let item = library
+            .mods
+            .iter()
+            .find(|m| m.key == key)
+            .cloned()
+            .ok_or_else(|| pick("Запись о моде не найдена", "Mod record not found").to_string())?;
+        if item.bundled {
+            return Err(pick(
+                "Мод входит в сборку и не выключается",
+                "The mod is bundled with the build and cannot be turned off",
+            )
+            .to_string());
+        }
+        if item.enabled == enable {
+            return Ok(String::new());
+        }
+        let backup_dir = game.backups_dir().join(&item.key);
+        let disabled_dir = game.disabled_dir(&item.key);
+        if enable && !disabled_dir.exists() {
+            return Err(pick(
+                "Файлы выключенного мода не найдены: установите мод заново",
+                "The turned-off mod's files are missing: reinstall the mod",
+            )
+            .to_string());
+        }
+        let conflicts = crate::library::path_conflicts(&library, &item);
+        if !conflicts.is_empty() {
+            return Err(fill(
+                &pick(
+                    "Файлы мода использует «{name}». Сначала выключите или удалите его.",
+                    "The mod's files are also used by “{name}”. Turn it off or remove it first.",
+                ),
+                &[("name", &conflicts.join(", "))],
+            ));
+        }
+        update_library(&cfg.root_dir, |library| {
+            if let Some(record) = library.mods.iter_mut().find(|m| m.key == item.key) {
+                record.pending = Some(enable);
+            }
+            Ok(())
+        })?;
+        p.stage(if enable {
+            pick("Включение мода", "Enabling mod")
+        } else {
+            pick("Выключение мода", "Disabling mod")
+        });
+        if let Err(failure) = installer::set_mod_enabled(
+            &game.path,
+            &backup_dir,
+            &disabled_dir,
+            &item.files,
+            enable,
+            p,
+        ) {
+            // Если откат удался, запись остаётся в прежнем состоянии.
+            // Если нет — маркер `pending` доделает операцию при запуске.
+            if failure.rolled_back {
+                let _ = update_library(&cfg.root_dir, |library| {
+                    if let Some(record) = library.mods.iter_mut().find(|m| m.key == item.key) {
+                        record.pending = None;
+                    }
+                    Ok(())
+                });
+            }
+            return Err(failure.message);
+        }
+        update_library(&cfg.root_dir, |library| {
+            if let Some(record) = library.mods.iter_mut().find(|m| m.key == item.key) {
+                record.enabled = enable;
+                record.pending = None;
+            }
+            Ok(())
+        })?;
+        let action = if enable {
+            pick("Включён", "Enabled")
+        } else {
+            pick("Выключен", "Disabled")
+        };
+        c.log(fill(
+            &pick("{action} мод «{name}»", "{action} mod “{name}”"),
+            &[("action", action), ("name", &item.name)],
+        ));
+        Ok(fill(
+            &pick("«{name}» {state}", "“{name}” {state}"),
+            &[
+                ("name", &item.name),
+                (
+                    "state",
+                    if enable {
+                        pick("включён", "enabled")
+                    } else {
+                        pick("выключен", "disabled")
+                    },
+                ),
+            ],
         ))
     });
     p

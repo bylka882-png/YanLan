@@ -5,6 +5,7 @@
 //! вместе с папкой.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
@@ -56,6 +57,11 @@ impl GameInstall {
 
     pub fn backups_dir(&self) -> PathBuf {
         self.work_dir().join("backups")
+    }
+
+    /// Файлы выключенного мода, убранные из сборки.
+    pub fn disabled_dir(&self, key: &str) -> PathBuf {
+        self.work_dir().join("disabled").join(key)
     }
 
     /// Название сборки для интерфейса.
@@ -465,6 +471,17 @@ pub struct InstalledMod {
     /// true — мод уже был в сборке (`ioa`), удалять его нельзя.
     #[serde(default)]
     pub bundled: bool,
+    /// false — файлы мода убраны в `.yanlan/disabled/<key>` и в игре не участвуют.
+    #[serde(default = "enabled_by_default")]
+    pub enabled: bool,
+    /// Незавершённое переключение: `Some(true)` — включаем, `Some(false)` — выключаем.
+    /// Запись остаётся, если лаунчер закрыли посреди операции.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending: Option<bool>,
+}
+
+fn enabled_by_default() -> bool {
+    true
 }
 
 impl InstalledMod {
@@ -489,6 +506,8 @@ impl InstalledMod {
             cfg: String::new(),
             version: String::new(),
             bundled: false,
+            enabled: true,
+            pending: None,
         }
     }
 }
@@ -569,6 +588,36 @@ impl Library {
         let pos = self.mods.iter().position(|m| m.key == key)?;
         Some(self.mods.remove(pos))
     }
+}
+
+/// Включённые моды этой же сборки, которые ставят те же файлы.
+///
+/// Порядок установки не хранится, поэтому переключать такой мод нельзя:
+/// иначе один мод вернёт оригинал поверх файлов другого.
+pub fn path_conflicts(library: &Library, item: &InstalledMod) -> Vec<String> {
+    let paths: HashSet<String> = item
+        .files
+        .iter()
+        .map(|file| file.path.to_lowercase())
+        .collect();
+    if paths.is_empty() {
+        return Vec::new();
+    }
+    let mut names = Vec::new();
+    for other in library
+        .mods
+        .iter()
+        .filter(|other| other.game_id == item.game_id && other.key != item.key && other.enabled)
+    {
+        if other
+            .files
+            .iter()
+            .any(|file| paths.contains(&file.path.to_lowercase()))
+        {
+            names.push(other.name.clone());
+        }
+    }
+    names
 }
 
 pub fn kind_label(kind: &str) -> &'static str {
@@ -701,6 +750,53 @@ mod tests {
             "yanderesimulator.exe"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn conflicts_only_count_enabled_mods() {
+        let mut a = InstalledMod::new(
+            "a",
+            "A",
+            "mod",
+            "",
+            "game",
+            vec![ModFile {
+                path: "BepInEx/plugins/x.dll".to_string(),
+                replaced: true,
+            }],
+        );
+        a.key = "a".to_string();
+        let mut b = InstalledMod::new(
+            "b",
+            "B",
+            "mod",
+            "",
+            "game",
+            vec![ModFile {
+                path: "BepInEx/plugins/X.dll".to_string(),
+                replaced: true,
+            }],
+        );
+        b.key = "b".to_string();
+        let mut off = InstalledMod::new(
+            "c",
+            "C",
+            "mod",
+            "",
+            "game",
+            vec![ModFile {
+                path: "BepInEx/plugins/x.dll".to_string(),
+                replaced: false,
+            }],
+        );
+        off.key = "c".to_string();
+        off.enabled = false;
+
+        let mut library = Library::default();
+        library.add(a.clone());
+        library.add(b);
+        library.add(off);
+        assert_eq!(path_conflicts(&library, &a), vec!["B".to_string()]);
     }
 
     #[test]

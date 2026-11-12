@@ -17,6 +17,13 @@ enum InstalledAction {
         name: String,
         game_id: String,
     },
+    /// Переключатель: файлы мода убираются в `.yanlan/disabled`, а не удаляются.
+    ToggleMod {
+        key: String,
+        name: String,
+        game_id: String,
+        enable: bool,
+    },
     /// Конфиг установленного мода: открывает редактор.
     ModSettings {
         game_id: String,
@@ -85,6 +92,8 @@ impl App {
                     cfg,
                     version,
                     bundled: true,
+                    enabled: true,
+                    pending: None,
                 });
             }
         }
@@ -323,8 +332,12 @@ impl App {
                 ui.label(
                     RichText::new(pick(
                         "Удаление мода возвращает файлы игры в состояние до установки. \
+                         Переключатель убирает файлы мода в .yanlan/disabled и возвращает их \
+                         обратно без удаления и повторного скачивания. \
                          Сами сборки и резервные копии хранятся в папке .yanlan внутри игры.",
                         "Removing a mod restores the game files to their state before installation. \
+                         The switch moves the mod files to .yanlan/disabled and puts them back \
+                         without removing or re-downloading anything. \
                          Builds and backups are kept in the .yanlan folder inside the game.",
                     ))
                     .size(11.0)
@@ -353,6 +366,32 @@ impl App {
                 } else {
                     self.perform_confirm(action);
                 }
+            }
+            InstalledAction::ToggleMod {
+                key,
+                name,
+                game_id,
+                enable,
+            } => {
+                let Some(game) = self.games.iter().find(|g| g.meta.id == game_id).cloned() else {
+                    self.toast(
+                        pick(
+                            "Сборка, в которую установлен мод, не найдена",
+                            "The build this mod is installed into was not found",
+                        ),
+                        false,
+                    );
+                    return;
+                };
+                let c = jobs::Ctx2 {
+                    ctx: self.ctx.clone(),
+                    tx: self.tx.clone(),
+                };
+                let progress = jobs::set_mod_enabled(c, self.cfg.clone(), game, key, enable);
+                self.start_parallel_job(
+                    fill(&pick("Мод {name}", "Mod {name}"), &[("name", &name)]),
+                    progress,
+                );
             }
             InstalledAction::GoBuilds => {
                 self.tab = Tab::Builds;
@@ -437,34 +476,41 @@ fn mod_row(ui: &mut egui::Ui, p: &Palette, item: &InstalledMod) -> Option<Instal
     ui.painter()
         .rect(rect, 10.0, p.panel, egui::Stroke::new(1.0_f32, p.border));
 
-    // Кнопки справа: «Удалить» (кроме входящих в сборку) и шестерёнка
-    // (только если у мода есть конфиг).
+    // Кнопки справа: «Удалить» (кроме входящих в сборку), шестерёнка
+    // (только если у мода есть конфиг) и переключатель.
     let show_remove = !item.bundled;
     let show_gear = !item.cfg.is_empty();
+    let show_switch = !item.bundled;
     let btn_w = 86.0;
     let btn_h = 34.0;
     let btn_rect = egui::Rect::from_center_size(
         egui::pos2(rect.right() - 14.0 - btn_w / 2.0, rect.center().y),
         Vec2::new(btn_w, btn_h),
     );
-    let gear_right = if show_remove {
+    let mut right = if show_remove {
         btn_rect.left() - 8.0
     } else {
         rect.right() - 14.0
     };
-    let gear_rect = egui::Rect::from_center_size(
-        egui::pos2(gear_right - 17.0, rect.center().y),
-        Vec2::new(34.0, 32.0),
-    );
+    let gear_rect = show_gear.then(|| {
+        let gear = egui::Rect::from_center_size(
+            egui::pos2(right - 17.0, rect.center().y),
+            Vec2::new(34.0, 32.0),
+        );
+        right = gear.left() - 8.0;
+        gear
+    });
+    let switch_rect = show_switch.then(|| {
+        let switch = egui::Rect::from_center_size(
+            egui::pos2(right - 22.0, rect.center().y),
+            Vec2::new(44.0, 24.0),
+        );
+        right = switch.left() - 10.0;
+        switch
+    });
     // Текст занимает всё слева от кнопок, поэтому длинные строки обрезаются,
     // не заезжая под них.
-    let text_right = if show_gear {
-        gear_rect.left() - 10.0
-    } else if show_remove {
-        btn_rect.left() - 10.0
-    } else {
-        rect.right() - 14.0
-    };
+    let text_right = right;
     let text_rect = egui::Rect::from_min_max(
         rect.min + Vec2::new(14.0, 5.0),
         egui::pos2(text_right, rect.max.y - 5.0),
@@ -481,7 +527,7 @@ fn mod_row(ui: &mut egui::Ui, p: &Palette, item: &InstalledMod) -> Option<Instal
                         RichText::new(trim_to(&item.name, 40))
                             .size(13.0)
                             .strong()
-                            .color(p.text),
+                            .color(if item.enabled { p.text } else { p.muted }),
                     )
                     .truncate(),
                 );
@@ -493,6 +539,8 @@ fn mod_row(ui: &mut egui::Ui, p: &Palette, item: &InstalledMod) -> Option<Instal
                 );
                 if item.bundled {
                     w::tag_small(ui, pick("в сборке", "bundled"), p.accent_dim, p);
+                } else if !item.enabled {
+                    w::tag_small(ui, pick("выключен", "off"), p.muted, p);
                 }
             });
             let mut parts: Vec<String> = Vec::new();
@@ -520,7 +568,31 @@ fn mod_row(ui: &mut egui::Ui, p: &Palette, item: &InstalledMod) -> Option<Instal
         },
     );
 
-    if show_gear {
+    if let Some(switch_rect) = switch_rect {
+        ui.scope_builder(
+            egui::UiBuilder::new().max_rect(switch_rect).layout(
+                egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+            ),
+            |ui| {
+                let mut on = item.enabled;
+                let hint = if on {
+                    pick("Выключить без удаления", "Turn off without removing")
+                } else {
+                    pick("Включить мод", "Turn the mod on")
+                };
+                if w::switch(ui, &mut on, p).on_hover_text(hint).clicked() {
+                    action = Some(InstalledAction::ToggleMod {
+                        key: item.key.clone(),
+                        name: item.name.clone(),
+                        game_id: item.game_id.clone(),
+                        enable: on,
+                    });
+                }
+            },
+        );
+    }
+
+    if let Some(gear_rect) = gear_rect {
         ui.scope_builder(
             egui::UiBuilder::new().max_rect(gear_rect).layout(
                 egui::Layout::centered_and_justified(egui::Direction::LeftToRight),

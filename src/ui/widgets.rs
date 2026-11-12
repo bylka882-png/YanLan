@@ -160,6 +160,24 @@ pub fn close(ui: &mut Ui, p: &Palette) -> Response {
     response
 }
 
+/// Дорожка и ручка переключателя. Общая для `toggle` и `switch`.
+fn paint_switch(ui: &mut Ui, track: egui::Rect, t: f32, hovered: bool, p: &Palette) {
+    let fill = p.card.lerp_to_gamma(p.accent, t);
+    let border = if hovered && t < 0.5 {
+        p.accent_dim
+    } else {
+        p.border.lerp_to_gamma(p.accent, t)
+    };
+    ui.painter()
+        .rect(track, 12.0, fill, Stroke::new(1.0_f32, border));
+    let knob_x = egui::lerp((track.left() + 12.0)..=(track.right() - 12.0), t);
+    ui.painter().circle_filled(
+        pos2(knob_x, track.center().y),
+        if hovered { 8.5 } else { 7.6 },
+        p.muted.lerp_to_gamma(Color32::WHITE, t),
+    );
+}
+
 /// Розовый переключатель-ползунок: сам переключатель слева, подпись справа.
 /// Возвращает `changed()` при щелчке.
 pub fn toggle(ui: &mut Ui, value: &mut bool, text: &str, p: &Palette) -> Response {
@@ -189,24 +207,30 @@ pub fn toggle(ui: &mut Ui, value: &mut bool, text: &str, p: &Palette) -> Respons
 
     // Плавно едет не только ручка, но и заливка дорожки.
     let t = ui.ctx().animate_bool_with_time(response.id, *value, 0.16);
-    let fill = p.card.lerp_to_gamma(p.accent, t);
-    let border = if hovered && t < 0.5 {
-        p.accent_dim
-    } else {
-        p.border.lerp_to_gamma(p.accent, t)
-    };
-    ui.painter()
-        .rect(track, 12.0, fill, Stroke::new(1.0_f32, border));
-    let knob_x = egui::lerp((track.left() + 12.0)..=(track.right() - 12.0), t);
-    ui.painter().circle_filled(
-        pos2(knob_x, track.center().y),
-        if hovered { 8.5 } else { 7.6 },
-        p.muted.lerp_to_gamma(Color32::WHITE, t),
-    );
+    paint_switch(ui, track, t, hovered, p);
     if t > 0.01 && t < 0.99 {
         ui.ctx().request_repaint();
     }
 
+    if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    if response.clicked() {
+        *value = !*value;
+        response.mark_changed();
+    }
+    response
+}
+
+/// Переключатель без подписи: для строк, где место занято кнопками.
+pub fn switch(ui: &mut Ui, value: &mut bool, p: &Palette) -> Response {
+    let (rect, mut response) = ui.allocate_exact_size(Vec2::new(44.0, 24.0), Sense::click());
+    let hovered = response.hovered();
+    let t = ui.ctx().animate_bool_with_time(response.id, *value, 0.16);
+    paint_switch(ui, rect, t, hovered, p);
+    if t > 0.01 && t < 0.99 {
+        ui.ctx().request_repaint();
+    }
     if hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
