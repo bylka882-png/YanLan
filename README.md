@@ -2,7 +2,7 @@
 
 Неофициальный лаунчер Yandere Simulator для Windows: отдельные сборки игры, каталог модов и редактор их конфигов.
 
-[![Built with OpenCode & DeepSeek 4.1 Flash](https://img.shields.io/badge/Built_with-OpenCode_%26_DeepSeek_4.1_Flash-2E2E8B?style=flat)](https://www.deepseek.com) [![Latest](https://img.shields.io/github/v/release/bylka882-png/YanLan?sort=semver&color=ffffff&label=Latest)](https://github.com/bylka882-png/YanLan/releases/latest) <br> [![Version](https://img.shields.io/github/v/release/bylka882-png/YanLan?sort=semver&color=2E8B57&label=Version)](CHANGELOG.md)ㅤ[![License](https://img.shields.io/badge/License-PF_NC_1.0-B8B800)](LICENSE.md)ㅤ[![Catalog YanMod](https://img.shields.io/badge/Catalog-YanMod-8A2E4D?style=flat)](https://github.com/bylka882-png/YanMod)
+[![Built with OpenCode & DeepSeek 4.1 Flash](https://img.shields.io/badge/Built_with-OpenCode_%26_DeepSeek_4.1_Flash-2E2E8B?style=flat)](https://www.deepseek.com) [![Latest](https://img.shields.io/github/v/release/bylka882-png/YanLan?sort=semver&color=ffffff&label=Latest)](https://github.com/bylka882-png/YanLan/releases/latest) <br> [![Version](https://img.shields.io/github/v/release/bylka882-png/YanLan?sort=semver&color=2E8B57&label=Version)](CHANGELOG.md)ㅤ[![License](https://img.shields.io/badge/License-PF_NC_1.0-B8B800)](LICENSE)ㅤ[![Catalog YanMod](https://img.shields.io/badge/Catalog-YanMod-8A2E4D?style=flat)](https://github.com/bylka882-png/YanMod)
 
 
 ## Возможности
@@ -71,6 +71,14 @@ cargo build --release
 
 ## Лицензия
 
-[PolyForm Noncommercial 1.0.0](LICENSE.md): использование и изменение разрешены только в некоммерческих целях; при распространении нужно сохранять уведомления лицензии.
+YanLan © 2026 Archangel192028.
 
-YanLan не связан с разработчиком Yandere Simulator. Файлы игры в репозиторий не входят.
+Проект распространяется по **PolyForm Noncommercial 1.0.0**. Полный текст — в файле [LICENSE](LICENSE), без изменений. Использование и изменение разрешены только в некоммерческих целях. При распространении нужно передавать получателю текст лицензии или ссылку на него.
+
+Уведомление, которое требуется сохранять при распространении:
+
+> Required Notice: Copyright © 2026 Archangel192028 (YanLan)
+
+Коммерческое использование требует отдельного разрешения правообладателя.
+
+YanLan не связан с разработчиком Yandere Simulator. Файлы игры в репозиторий не входят; права на них принадлежат их правообладателям.
