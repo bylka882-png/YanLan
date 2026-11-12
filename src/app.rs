@@ -971,8 +971,8 @@ impl App {
 
         let ended = util::now_ts();
         let seconds = (ended - run.started).max(0);
-        let crash = crate::diagnose::crash_signal(&run.path, run.started)
-            || code.map(crate::diagnose::is_crash_code).unwrap_or(false);
+        let crash = code.map(crate::diagnose::is_abnormal_code).unwrap_or(false)
+            || crate::diagnose::crash_signal(&run.path, run.started);
         crate::journal::append(
             &self.cfg.root_dir,
             crate::journal::Entry {

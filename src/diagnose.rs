@@ -646,6 +646,13 @@ pub fn is_crash_code(code: i32) -> bool {
     code & 0xC000_0000 == 0xC000_0000 && code != 0xC000_013A
 }
 
+/// Любое завершение игры, кроме нормального. Unity при падении возвращает
+/// собственные коды (например, 47818), а не NTSTATUS, поэтому одних кодов
+/// Windows недостаточно. 0xC000013A — обычное закрытие консоли.
+pub fn is_abnormal_code(code: i32) -> bool {
+    code as u32 != 0 && code as u32 != 0xC000_013A
+}
+
 /// Папка, где Unity хранит Player.log и отчёты CrashReporter.
 pub fn logs_dir() -> PathBuf {
     if let Some(local) = dirs::data_local_dir() {
@@ -1713,6 +1720,15 @@ mod tests {
         assert!(!is_crash_code(0));
         assert!(!is_crash_code(1));
         assert!(!is_crash_code(-1073741510)); // 0xC000013A — обычное закрытие
+    }
+
+    #[test]
+    fn unity_abnormal_exit_counts_as_crash() {
+        assert!(is_abnormal_code(47818)); // 0xBACA — реальное падение Unity
+        assert!(is_abnormal_code(1));
+        assert!(is_abnormal_code(-1073741819));
+        assert!(!is_abnormal_code(0));
+        assert!(!is_abnormal_code(-1073741510)); // 0xC000013A — обычное закрытие
     }
 
     #[test]
