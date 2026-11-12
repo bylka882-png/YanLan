@@ -2,10 +2,11 @@
 
 use std::fs::File;
 use std::io::copy;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::sync::Mutex;
 use std::thread;
+use std::time::Instant;
 
 use crate::builds::{self, Build};
 use crate::config::Config;
@@ -32,6 +33,10 @@ pub enum Ev {
     Cover {
         key: String,
         result: Result<Cover, String>,
+    },
+    /// Итог разбора логов после краха.
+    Crash {
+        result: Result<crate::diagnose::CrashReport, String>,
     },
     JobDone {
         /// Номер задачи (`Progress::id`), чтобы интерфейс не сбрасывал чужой прогресс.
@@ -400,13 +405,50 @@ fn download_catalog(
     Ok(dest)
 }
 
+/// Записывает в журнал время скачивания: анализатору крашей важно знать,
+/// какой мод появился прямо перед запуском и сколько он качался.
+fn note_download(
+    root: &Path,
+    game: &str,
+    name: &str,
+    archive: &Path,
+    started: i64,
+    timer: Instant,
+) {
+    let bytes = std::fs::metadata(archive)
+        .map(|meta| meta.len())
+        .unwrap_or(0);
+    crate::journal::append(
+        root,
+        crate::journal::Entry {
+            t: started,
+            event: "download".to_string(),
+            game: game.to_string(),
+            name: name.to_string(),
+            ms: timer.elapsed().as_millis() as i64,
+            bytes,
+            ..Default::default()
+        },
+    );
+}
+
 /// Скачивает архив мода в `downloads/`, не устанавливая его.
 pub fn download_catalog_mod(c: Ctx2, cfg: Config, variant: ModVariant) -> Progress {
     let progress = Progress::new();
     let p = progress.clone();
     spawn(c, progress, move |c, p| {
         cfg.ensure_dirs();
-        download_catalog(c, &cfg, &variant, p)?;
+        let download_started = now_ts();
+        let timer = Instant::now();
+        let archive = download_catalog(c, &cfg, &variant, p)?;
+        note_download(
+            &cfg.root_dir,
+            "",
+            &variant.name,
+            &archive,
+            download_started,
+            timer,
+        );
         Ok(fill(
             &pick("«{name}» скачан", "“{name}” downloaded"),
             &[("name", &variant.name)],
@@ -455,7 +497,17 @@ pub fn install_catalog_mods(
                         &[("v", &variant.version)],
                     ));
                 }
+                let download_started = now_ts();
+                let timer = Instant::now();
                 let archive = download_catalog(c, &cfg, variant, p)?;
+                note_download(
+                    &cfg.root_dir,
+                    &game.meta.id,
+                    &variant.name,
+                    &archive,
+                    download_started,
+                    timer,
+                );
 
                 // Ключ включает номер в очереди: установка нескольких модов
                 // за одну секунду не должна перетирать чужие резервные копии.
@@ -556,7 +608,17 @@ pub fn install_catalog_build(c: Ctx2, cfg: Config, variant: ModVariant, name: St
             ));
         }
 
+        let download_started = now_ts();
+        let timer = Instant::now();
         let archive = download_catalog(c, &cfg, &variant, p)?;
+        note_download(
+            &cfg.root_dir,
+            "",
+            &variant.name,
+            &archive,
+            download_started,
+            timer,
+        );
         p.stage(pick("Установка сборки", "Installing build"));
         p.detail(label.clone());
         let staging = cfg.games_dir().join(format!(".staging-{dir_name}"));
@@ -931,6 +993,61 @@ pub fn delete_game(c: Ctx2, cfg: Config, game: GameInstall) -> Progress {
             &pick("Сборка {name} удалена", "Build {name} deleted"),
             &[("name", &name)],
         ))
+    });
+    p
+}
+
+/// Разбирает логи упавшей игры в фоне и сохраняет отчёт.
+pub fn analyze_crash(
+    c: Ctx2,
+    cfg: Config,
+    game: GameInstall,
+    started: i64,
+    exit_code: Option<i32>,
+    duration_s: i64,
+) -> Progress {
+    let progress = Progress::new();
+    let p = progress.clone();
+    spawn_data(c, progress, move |c, p| {
+        let library = Library::load(&cfg.root_dir);
+        // Паника внутри разбора не должна оставить вкладку в вечной загрузке.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::diagnose::analyze(
+                &cfg.root_dir,
+                &game,
+                &library,
+                started,
+                exit_code,
+                duration_s,
+                p,
+            )
+            .and_then(|report| {
+                crate::diagnose::save(&cfg.root_dir, &report)?;
+                Ok(report)
+            })
+        }))
+        .unwrap_or_else(|_| {
+            Err(pick(
+                "Внутренняя ошибка при разборе логов",
+                "Internal error while analyzing logs",
+            )
+            .to_string())
+        });
+        if let Ok(report) = &result {
+            let title = report.title();
+            c.log(fill(
+                &pick(
+                    "Краш разобран: {title} ({confidence}%)",
+                    "Crash analyzed: {title} ({confidence}%)",
+                ),
+                &[
+                    ("title", &title),
+                    ("confidence", &report.confidence.to_string()),
+                ],
+            ));
+        }
+        c.emit(Ev::Crash { result });
+        Ok(String::new())
     });
     p
 }

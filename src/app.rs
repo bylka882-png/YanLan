@@ -1,6 +1,7 @@
 //! Состояние приложения и общий каркас интерфейса.
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
 
@@ -23,6 +24,7 @@ pub enum Tab {
     Builds,
     Catalog,
     Installed,
+    Crashes,
     Settings,
 }
 
@@ -32,6 +34,7 @@ impl Tab {
             Tab::Builds => pick("Сборки", "Builds"),
             Tab::Catalog => pick("Каталог", "Catalog"),
             Tab::Installed => pick("Установлено", "Installed"),
+            Tab::Crashes => pick("Краши", "Crashes"),
             Tab::Settings => pick("Настройки", "Settings"),
         }
     }
@@ -50,6 +53,10 @@ impl Tab {
                 "Моды во всех сборках — по секции на сборку",
                 "Mods across all builds — one section per build",
             ),
+            Tab::Crashes => pick(
+                "История падений: причина, уверенность и строки из логов",
+                "Crash history: cause, confidence and log lines",
+            ),
             Tab::Settings => pick(
                 "Папки, тема и обслуживание",
                 "Folders, theme and maintenance",
@@ -62,6 +69,7 @@ impl Tab {
             Tab::Builds => "▶",
             Tab::Catalog => "◆",
             Tab::Installed => "▣",
+            Tab::Crashes => "⚠",
             Tab::Settings => "☰",
         }
     }
@@ -93,6 +101,16 @@ pub struct Toast {
     pub text: String,
     pub ok: bool,
     pub at: Instant,
+}
+
+/// Запущенная игра. Пока процесс жив, лаунчер опрашивает его раз в секунду,
+/// чтобы поймать момент падения, а не ждать следующего запуска.
+pub struct GameRun {
+    pub child: std::process::Child,
+    pub game_id: String,
+    pub game_name: String,
+    pub path: PathBuf,
+    pub started: i64,
 }
 
 /// Готовая обложка каталога: кадры GIF (или один кадр) и их задержки.
@@ -204,6 +222,16 @@ pub struct App {
     pub player: Option<crate::player::Player>,
     /// Открытый редактор конфига установленного мода.
     pub mod_cfg: Option<crate::cfg_edit::Editor>,
+    /// Запущенная игра, за завершением которой следит лаунчер.
+    pub run: Option<GameRun>,
+    /// История разборов падений, новые сверху.
+    pub crashes: Vec<crate::diagnose::CrashReport>,
+    /// Фильтр «Краши» по id сборки; `None` — все сборки.
+    pub crash_filter: Option<String>,
+    /// Открытый отчёт в списке крашей.
+    pub crash_selected: Option<String>,
+    /// Разбор логов, который идёт прямо сейчас.
+    pub crash_progress: Option<Progress>,
 }
 
 impl App {
@@ -281,10 +309,16 @@ impl App {
             player_id: None,
             player: None,
             mod_cfg: None,
+            run: None,
+            crashes: Vec::new(),
+            crash_filter: None,
+            crash_selected: None,
+            crash_progress: None,
         };
 
         app.reload_library();
         app.recover_pending_toggles();
+        app.crashes = crate::diagnose::load(&app.cfg.root_dir);
 
         if let Some(cache) = builds::load_cache(&app.cfg) {
             app.set_builds(cache.builds);
@@ -782,6 +816,33 @@ impl App {
                 Ev::Log(text) => {
                     self.log(text);
                 }
+                Ev::Crash { result } => {
+                    self.crash_progress = None;
+                    match result {
+                        Ok(report) => {
+                            self.crashes.retain(|item| item.id != report.id);
+                            self.crashes.push(report.clone());
+                            self.crashes.sort_by(|a, b| b.at.cmp(&a.at));
+                            self.crash_filter = Some(report.game_id.clone());
+                            self.crash_selected = Some(report.id.clone());
+                            self.tab = Tab::Crashes;
+                            self.toast(
+                                fill(
+                                    &pick(
+                                        "Краш разобран: {title} · {confidence}%",
+                                        "Crash analyzed: {title} · {confidence}%",
+                                    ),
+                                    &[
+                                        ("title", &report.title()),
+                                        ("confidence", &report.confidence.to_string()),
+                                    ],
+                                ),
+                                true,
+                            );
+                        }
+                        Err(err) => self.toast(err, false),
+                    }
+                }
                 Ev::DataDone { ok, message } => {
                     if !ok {
                         self.toast(message, false);
@@ -812,6 +873,27 @@ impl App {
     }
 
     pub fn play_game(&mut self) {
+        if self.run.is_some() {
+            self.toast(
+                pick(
+                    "Игра уже запущена — лаунчер ждёт её завершения",
+                    "The game is already running — the launcher is waiting for it",
+                ),
+                false,
+            );
+            return;
+        }
+        if self.crash_progress.is_some() {
+            // Одновременный разбор двух падений перепутал бы отчёты.
+            self.toast(
+                pick(
+                    "Дождитесь окончания разбора логов",
+                    "Wait until the log analysis finishes",
+                ),
+                false,
+            );
+            return;
+        }
         let Some(game) = self.current_game().cloned() else {
             self.toast(
                 pick(
@@ -832,16 +914,137 @@ impl App {
             );
             return;
         };
+        let started = util::now_ts();
         match runner::launch(&game.path, &exe, &crate::util::split_args(&game.meta.args)) {
-            Ok(()) => self.log(fill(
-                &pick("Запуск {name} ({path})", "Launching {name} ({path})"),
-                &[
-                    ("name", &game.display_name()),
-                    ("path", &exe.display().to_string()),
-                ],
-            )),
+            Ok(child) => {
+                let enabled: Vec<String> = self
+                    .library
+                    .mods
+                    .iter()
+                    .filter(|item| item.game_id == game.meta.id && item.enabled)
+                    .map(|item| item.name.clone())
+                    .collect();
+                crate::journal::append(
+                    &self.cfg.root_dir,
+                    crate::journal::Entry {
+                        t: started,
+                        event: "launch".to_string(),
+                        game: game.meta.id.clone(),
+                        name: game.display_name(),
+                        mods: enabled,
+                        ..Default::default()
+                    },
+                );
+                self.log(fill(
+                    &pick("Запуск {name} ({path})", "Launching {name} ({path})"),
+                    &[
+                        ("name", &game.display_name()),
+                        ("path", &exe.display().to_string()),
+                    ],
+                ));
+                self.run = Some(GameRun {
+                    child,
+                    game_id: game.meta.id.clone(),
+                    game_name: game.display_name(),
+                    path: game.path.clone(),
+                    started,
+                });
+            }
             Err(err) => self.toast(err, false),
         }
+    }
+
+    /// Проверяет, не завершилась ли игра. Вызывается каждый кадр; пока процесс
+    /// жив, `try_wait` ничего не делает и не мешает интерфейсу.
+    fn poll_game(&mut self) {
+        let code = match self.run.as_mut() {
+            Some(run) => match run.child.try_wait() {
+                Ok(Some(status)) => status.code(),
+                Ok(None) => return,
+                Err(_) => None,
+            },
+            None => return,
+        };
+        let Some(run) = self.run.take() else {
+            return;
+        };
+
+        let ended = util::now_ts();
+        let seconds = (ended - run.started).max(0);
+        let crash = crate::diagnose::crash_signal(&run.path, run.started)
+            || code.map(crate::diagnose::is_crash_code).unwrap_or(false);
+        crate::journal::append(
+            &self.cfg.root_dir,
+            crate::journal::Entry {
+                t: ended,
+                event: "exit".to_string(),
+                game: run.game_id.clone(),
+                name: run.game_name.clone(),
+                code: code.unwrap_or(-1),
+                seconds,
+                crash,
+                ..Default::default()
+            },
+        );
+        self.log(fill(
+            &pick(
+                "Игра закрыта: {name} ({time})",
+                "Game closed: {name} ({time})",
+            ),
+            &[
+                ("name", &run.game_name),
+                ("time", &util::human_eta(seconds as f64)),
+            ],
+        ));
+
+        if !crash {
+            return;
+        }
+        self.tab = Tab::Crashes;
+        self.crash_filter = Some(run.game_id.clone());
+        let Some(game) = self
+            .games
+            .iter()
+            .find(|game| game.meta.id == run.game_id)
+            .cloned()
+        else {
+            self.toast(
+                pick(
+                    "Игра упала, но сборка уже удалена — разобрать логи нельзя",
+                    "The game crashed but the build is gone — logs cannot be analyzed",
+                ),
+                false,
+            );
+            return;
+        };
+        self.start_crash_analysis(game, run.started, code, seconds);
+    }
+
+    fn start_crash_analysis(
+        &mut self,
+        game: GameInstall,
+        started: i64,
+        exit_code: Option<i32>,
+        duration_s: i64,
+    ) {
+        if self.crash_progress.is_some() {
+            return;
+        }
+        let c = jobs::Ctx2 {
+            ctx: self.ctx.clone(),
+            tx: self.tx.clone(),
+        };
+        let progress =
+            jobs::analyze_crash(c, self.cfg.clone(), game, started, exit_code, duration_s);
+        self.crash_progress = Some(progress);
+        self.crash_selected = None;
+        self.toast(
+            pick(
+                "Игра упала — разбираем логи",
+                "The game crashed — analyzing logs",
+            ),
+            true,
+        );
     }
 
     fn sidebar(&mut self, ui: &mut egui::Ui) {
@@ -858,7 +1061,13 @@ impl App {
         w::section_title(ui, pick("РАЗДЕЛЫ", "SECTIONS"), &p);
         ui.add_space(4.0);
 
-        let tabs = [Tab::Builds, Tab::Catalog, Tab::Installed, Tab::Settings];
+        let tabs = [
+            Tab::Builds,
+            Tab::Catalog,
+            Tab::Installed,
+            Tab::Crashes,
+            Tab::Settings,
+        ];
         for tab in tabs {
             if nav_item(ui, &p, self.tab == tab, tab.icon(), tab.title()) {
                 self.tab = tab;
@@ -2038,6 +2247,7 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.ctx = ctx.clone();
         self.pump();
+        self.poll_game();
 
         // Горячие клавиши: Ctrl+N — создать сборку, Esc — закрыть диалог.
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::N)) {
@@ -2087,9 +2297,13 @@ impl eframe::App for App {
             self.refresh_catalog();
         }
 
-        let busy = self.progress.is_some() || self.builds_loading;
+        let busy = self.progress.is_some() || self.builds_loading || self.crash_progress.is_some();
         if busy || self.catalog_loading {
             ctx.request_repaint_after(Duration::from_millis(100));
+        }
+        if self.run.is_some() {
+            // Игра работает — опрашиваем процесс, чтобы поймать падение сразу.
+            ctx.request_repaint_after(Duration::from_millis(400));
         }
 
         // Настройки могли измениться — синхронизируем тему и заголовок окна.
@@ -2149,6 +2363,7 @@ impl eframe::App for App {
                 Tab::Builds => self.builds_view(ui),
                 Tab::Catalog => self.catalog_view(ui),
                 Tab::Installed => self.installed_view(ui),
+                Tab::Crashes => self.crashes_view(ui),
                 Tab::Settings => self.settings_view(ui),
             });
 

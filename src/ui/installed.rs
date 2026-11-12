@@ -1,5 +1,7 @@
 //! Вкладка «Установлено»: моды, установленные в сборки.
 
+use std::collections::HashMap;
+
 use egui::{RichText, Vec2};
 
 use crate::app::{App, ConfirmAction, Tab};
@@ -9,7 +11,7 @@ use crate::library::{self, InstalledMod};
 use crate::mods;
 use crate::theme::Palette;
 use crate::ui::widgets as w;
-use crate::util::{format_ts, trim_to};
+use crate::util::{format_ts_secs, human_ms, trim_to};
 
 enum InstalledAction {
     UninstallMod {
@@ -98,6 +100,7 @@ impl App {
             }
         }
         let current = self.current_game().map(|g| g.display_name());
+        let downloads = downloads_by_name(&self.cfg.root_dir);
         let mut action: Option<InstalledAction> = None;
 
         egui::ScrollArea::vertical()
@@ -304,7 +307,9 @@ impl App {
                         });
                         ui.add_space(4.0);
                         for item in items {
-                            if let Some(act) = mod_row(ui, &p, item) {
+                            if let Some(act) =
+                                mod_row(ui, &p, item, downloads.get(&item.name).copied())
+                            {
                                 action = Some(act);
                             }
                             ui.add_space(4.0);
@@ -455,6 +460,15 @@ impl App {
     }
 }
 
+/// Длительность скачивания по названию мода: журнал хранит её в миллисекундах.
+fn downloads_by_name(root: &std::path::Path) -> HashMap<String, i64> {
+    crate::journal::read(root)
+        .into_iter()
+        .filter(|entry| entry.event == "download" && entry.ms > 0)
+        .map(|entry| (entry.name, entry.ms))
+        .collect()
+}
+
 fn empty_card(ui: &mut egui::Ui, p: &Palette, title: &str, text: &str) {
     egui::Frame::none()
         .fill(p.panel)
@@ -469,7 +483,12 @@ fn empty_card(ui: &mut egui::Ui, p: &Palette, title: &str, text: &str) {
         });
 }
 
-fn mod_row(ui: &mut egui::Ui, p: &Palette, item: &InstalledMod) -> Option<InstalledAction> {
+fn mod_row(
+    ui: &mut egui::Ui,
+    p: &Palette,
+    item: &InstalledMod,
+    download: Option<i64>,
+) -> Option<InstalledAction> {
     let mut action = None;
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 56.0), egui::Sense::hover());
@@ -560,7 +579,13 @@ fn mod_row(ui: &mut egui::Ui, p: &Palette, item: &InstalledMod) -> Option<Instal
                     &[("count", &item.files.len().to_string())],
                 ));
                 if item.installed_at > 0 {
-                    parts.push(format_ts(item.installed_at));
+                    parts.push(format_ts_secs(item.installed_at));
+                }
+                if let Some(ms) = download {
+                    parts.push(fill(
+                        &pick("скачан за {time}", "downloaded in {time}"),
+                        &[("time", &human_ms(ms))],
+                    ));
                 }
             }
             let meta = parts.join("  ·  ");

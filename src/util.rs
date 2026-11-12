@@ -190,6 +190,31 @@ pub fn format_ts(ts: i64) -> String {
 }
 
 /// Форматирует дату `YYYY-MM-DD` на текущем языке интерфейса.
+/// Длительность скачивания: миллисекунды до секунды, дальше — секунды.
+pub fn human_ms(ms: i64) -> String {
+    if ms >= 1000 {
+        format!("{:.1} {}", ms as f64 / 1000.0, pick("с", "s"))
+    } else {
+        format!("{ms} {}", pick("мс", "ms"))
+    }
+}
+
+/// То же, что [`format_ts`], но с секундами: для журнала запусков и крашей
+/// важна точность до секунды.
+pub fn format_ts_secs(ts: i64) -> String {
+    if ts <= 0 {
+        return String::new();
+    }
+    let (y, m, d, hh, mm) = local_civil(ts);
+    let ss = ts.rem_euclid(60);
+    if is_ru() {
+        format!("{d:02}.{m:02}.{y} {hh:02}:{mm:02}:{ss:02}")
+    } else {
+        let month = MONTHS_EN_SHORT[(m as usize).clamp(1, 12) - 1];
+        format!("{month} {d}, {y} {hh:02}:{mm:02}:{ss:02}")
+    }
+}
+
 pub fn format_date(date: &str) -> String {
     let parts: Vec<&str> = date.split('-').collect();
     if parts.len() == 3 {
