@@ -233,7 +233,7 @@ C:\Users\RAGE\Downloads\yanlan\
 ├─ build_release.bat          Convenience script for a release build
 ├─ README.md                  End-user overview
 ├─ CHANGELOG.md               Release history
-├─ LICENSE.md                 License text
+├─ LICENSE                     License text
 ├─ cargo.exe                  Local Cargo binary used by the project owner
 ├─ assets/
 │  ├─ icon.ico                Windows executable icon
@@ -1227,7 +1227,7 @@ Expected artifact:
   target\release\YanLan.exe
 
 Recommended release bundle:
-  YanLan.exe, README.md, CHANGELOG.md, LICENSE.md
+  YanLan.exe, README.md, CHANGELOG.md, LICENSE
 
 The executable is portable. It stores configuration in %APPDATA% and data in
 the configured root directory; it does not write to its own directory.
@@ -1557,7 +1557,7 @@ a third language requires a structural change to a key-based dictionary.
 3. Update the README badge and the build artifact name.
 4. Add a CHANGELOG entry using Keep a Changelog and SemVer.
 5. Run the release verification checklist.
-6. Attach YanLan.exe, README.md, CHANGELOG.md, and LICENSE.md to the release.
+6. Attach YanLan.exe, README.md, CHANGELOG.md, and LICENSE to the release.
 7. Verify the executable's embedded version and icon.
 
 Current versions: Cargo.toml 2.2.5, README 2.2.5, CHANGELOG 2.2.5.
