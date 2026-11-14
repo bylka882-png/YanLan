@@ -4,10 +4,10 @@ STANDARD OPERATING PROCEDURE AND ENGINEERING REFERENCE
 ================================================================================
 
 Document ID:            SOP-YL-001
-Revision:               2.1
-Date:                   2026-11-12
+Revision:               2.2
+Date:                   2026-11-14
 Product:                YanLan (Cargo package name: YanLan)
-Product version:        2.3.0 (declared in Cargo.toml; compiled into the binary)
+Product version:        2.4.5 (declared in Cargo.toml; compiled into the binary)
 Platform:               Windows 10 / Windows 11, x64
 Owner:                  Archangel192028
 License:                PolyForm Noncommercial 1.0.0
@@ -37,16 +37,18 @@ end-user README.
 
 In scope:
 - The YanLan desktop application and all Rust modules in src/.
-- Persistent data written by the launcher (configuration, library, caches).
-- Installation, rollback, catalog, configuration-editor, and player behavior.
+- Persistent data written by the launcher (configuration, library, caches, journal,
+  crash reports).
+- Installation, rollback, catalog, configuration-editor, player, and crash
+  analysis behavior.
 - Build, test, and release procedures for the Windows target.
 
 Out of scope:
 - The Yandere Simulator game itself and its assets.
 - The YanMod catalog repository content (byla882-png/YanMod).
 - Third-party runtimes (WebView2, graphics drivers).
-- Future modules explicitly deferred by the project owner: a mod manager, a
-  download manager, and a log/crash analyzer.
+- Future modules explicitly deferred by the project owner: a mod manager and a
+  download manager.
 
 Audience:
 - Maintainers performing code changes or releases.
@@ -109,6 +111,22 @@ Progress
 Toast
     A transient notification rendered in the bottom-right corner of the window.
 
+Journal
+    The append-only file <root>/journal.jsonl. It records game launches, process
+    exits (code, duration, crash flag), and mod downloads (duration, size).
+
+Crash report
+    A JSON document in <root>/crashes/ describing one abnormal game exit: cause
+    code, detail, confidence, evidence lines, scanned logs, and recent mods.
+
+Crash analysis
+    The background pass that finds and reads logs after an abnormal exit and
+    produces a crash report.
+
+Confidence
+    A heuristic percentage attached to a crash report. It reflects rule weights
+    and evidence, not a statistical probability.
+
 --------------------------------------------------------------------------------
 4. PRODUCT OVERVIEW
 --------------------------------------------------------------------------------
@@ -117,8 +135,9 @@ Toast
 
 YanLan is an unofficial desktop launcher for Yandere Simulator. It maintains
 multiple isolated game builds, installs community mods into a selected build
-with automatic backups and rollback, browses the YanMod catalog, and edits the
-INI-style configuration files used by BepInEx and AutoTranslator.
+with automatic backups and rollback, browses the YanMod catalog, edits the
+INI-style configuration files used by BepInEx and AutoTranslator, and diagnoses
+game crashes from launcher and Unity logs.
 
 The application is a single native Windows executable built with Rust, eframe,
 and egui. It has no installer and no external DLL dependencies. An embedded
@@ -145,6 +164,23 @@ WebView2 child window is used only for YouTube playback.
   - Local archive installation from disk.
   - Catalog installation with dependency resolution and conflict warnings.
   - Multi-volume mods declared as DL_url parts are joined before extraction.
+  - Enable/disable switch per installed mod without deleting its files.
+
+- Crash analysis
+  - Launch, exit, and mod-download timing recorded in a JSONL journal.
+  - The launcher waits for the game process and, on an abnormal exit, opens the
+    Crashes tab and starts log analysis automatically.
+  - Crash detection by strong log markers, Windows NTSTATUS codes, or any other
+    non-zero exit code; a normal exit (0) is ignored.
+  - Log discovery in the build folder and outside it: LocalLow,
+    %TEMP%\YandereDev, and Unity CrashReporter reports.
+  - Rule-based cause with confidence percentage, evidence lines with file and
+    line numbers, advice, and recent mods with install/download times.
+  - Crash history with an "All" filter and one chip per build, saved as one
+    JSON report per crash (last 50 kept).
+  - Actions: open the logs folder, open the build folder, copy the report.
+  - Launching the game and starting a second analysis are blocked while an
+    analysis is running.
 
 - Mod catalog (YanMod)
   - Search, category filters, and sorting by name or compatibility.
@@ -182,7 +218,9 @@ WebView2 child window is used only for YouTube playback.
 - The launcher does not provide automatic self-update.
 - The launcher does not sandbox or antivirus-scan downloaded archives.
 - The launcher does not manage save files.
-- The launcher does not upload telemetry or analytics.
+- The launcher does not upload telemetry, analytics, or crash reports.
+- The crash analyzer does not repair the game or disable mods automatically; it
+  only explains a probable cause and gives advice.
 
 --------------------------------------------------------------------------------
 5. SYSTEM REQUIREMENTS
@@ -226,7 +264,7 @@ network stack and is not routed through the launcher proxy setting.
 6. REPOSITORY LAYOUT
 --------------------------------------------------------------------------------
 
-C:\Users\RAGE\Downloads\yanlan\
+D:\yanlan\
 ├─ Cargo.toml                 Package metadata and dependencies
 ├─ Cargo.lock                 Locked dependency graph
 ├─ build.rs                   Windows icon and version resource generation
@@ -245,9 +283,11 @@ C:\Users\RAGE\Downloads\yanlan\
    ├─ builds.rs               Game version catalog and Unity mapping
    ├─ cfg_edit.rs             Mod configuration editor (parser and UI)
    ├─ config.rs               Launcher configuration persistence
+   ├─ diagnose.rs             Crash detection, log discovery, rule engine, reports
    ├─ i18n.rs                 Russian/English string selection
    ├─ installer.rs            Archive extraction and mod backup/rollback
    ├─ jobs.rs                 Background jobs and event protocol
+   ├─ journal.rs              Append-only launch/exit/download journal
    ├─ library.rs              Installed builds, library.json, executable lookup
    ├─ loading.rs              Animated loading indicator
    ├─ mods.rs                 YanMod catalog, manifests, compatibility
@@ -261,6 +301,7 @@ C:\Users\RAGE\Downloads\yanlan\
       ├─ mod.rs               UI module re-exports
       ├─ builds_view.rs       "Builds" tab
       ├─ catalog.rs           "Catalog" tab and detail dialogs
+      ├─ crashes.rs           "Crashes" tab: history, filters, reports
       ├─ installed.rs         "Installed" tab
       ├─ settings.rs          "Settings" tab
       └─ widgets.rs           Reusable custom widgets
@@ -300,7 +341,20 @@ ui/*
 
 jobs.rs
   Defines the event enum, spawns worker threads, contains the end-to-end work
-  flows (fetch catalog, install mod, install build, uninstall, delete).
+  flows (fetch catalog, install mod, install build, uninstall, delete, analyze
+  a crash).
+
+diagnose.rs
+  Crash detection, log discovery and tail reading, rule scoring, mod
+  attribution, and crash report rendering, saving, loading, and pruning.
+
+journal.rs
+  Append-only JSONL journal of launches, exits, and downloads with a process
+  lock and size-based pruning.
+
+ui/crashes.rs
+  Crash history, build filter chips, the in-progress analysis card, and report
+  cards with confidence, advice, evidence, and actions.
 
 net.rs
   Shared HTTP agent, text/JSON/byte retrieval, resumable downloads, proxy.
@@ -338,7 +392,8 @@ theme.rs / i18n.rs / util.rs / progress.rs / runner.rs / loading.rs
    e. Initializes the HTTP proxy from configuration.
    f. Creates the mpsc channel used by all worker threads.
    g. Decodes assets/loading.gif into textures.
-   h. Loads library.json and scans games/.
+   h. Loads library.json, scans games/, and loads crash history from
+      crashes/*.json.
    i. Loads the build cache and the mod catalog cache.
    j. Writes the launcher-folder line to the activity log.
    k. Refreshes the build catalog if its cache is older than 12 hours.
@@ -358,7 +413,8 @@ Every frame executes the following sequence in App::update:
    - Escape closes the topmost dialog in this priority:
      Create Build, Rename, Launch Options, Mod Settings, Catalog overlays.
 4. Start catalog loading if the Catalog tab is visible and has never loaded.
-5. Request a 100 ms repaint while a job or catalog load is active.
+5. Request a 100 ms repaint while a job, a crash analysis, or a catalog load is
+   active.
 6. Synchronize theme changes and native window chrome.
 7. Render the left sidebar (fixed 232 px).
 8. Render the bottom status bar (74 px idle, 102 px while a job is active).
@@ -379,6 +435,9 @@ App is the only long-lived state holder. Principal groups:
   section filter, sort mode, cover maps, detail selection, variant index,
   screenshot index.
 - Job state: progress, progress_id, job_title, speed sampling.
+- Game process: the running child, its build id/path, and the session start time.
+- Crash state: crash history, selected report, build filter, and the active
+  analysis progress.
 - Dialogs: show_create, rename, launch_opts, confirm, catalog_pending,
   catalog_build, mod_cfg, player_id.
 - Logging: log (maximum 400 lines) and toasts (maximum 5 visible).
@@ -387,6 +446,7 @@ Selection invariants:
 - If the selected game disappears, the first available game is selected.
 - If a catalog filter refers to a build that no longer exists, it is cleared.
 - Variant and screenshot indices are clamped before use.
+- A crash filter that refers to a deleted build is cleared before rendering.
 
 7.6 Background jobs and event protocol
 
@@ -396,6 +456,7 @@ Event type (jobs::Ev):
 - Builds { builds, fetched_at, error }
 - Catalog { mods, fetched_at, error }
 - Cover { key, result<Cover, String> }
+- Crash { result: Result<CrashReport, String> }
 - JobDone { id, ok, message }
 - DataDone { ok, message }
 - Log(String)
@@ -421,12 +482,16 @@ panic = "abort", which disables unwinding and therefore also disables this
 guard in release builds. The guard is effective in debug and test profiles.
 
 Cancellation is cooperative. Progress::cancel sets an atomic flag; download,
-extraction, and installation loops poll it. There is no forced thread
-termination.
+extraction, installation, and crash-analysis loops poll it. There is no forced
+thread termination.
+
+Crash analysis is a single dedicated job. While crash_progress is set, the Play
+button refuses to start the game and no second analysis can start, so two
+reports cannot overlap or mix logs.
 
 7.7 UI composition
 
-- Sidebar: logo, four navigation items, and version/source labels pinned to the
+- Sidebar: logo, five navigation items, and version/source labels pinned to the
   bottom.
 - Top bar: tab title, subtitle, active-build selector, and Play button.
 - Status bar: prompt or job stage, detail line, progress bar, speed, elapsed
@@ -446,8 +511,9 @@ hyperlinks; key-value rows.
 - Successful user operations produce a green toast.
 - Background refresh failures are logged and shown as inline error states, but
   do not create toasts unless the user explicitly requested the refresh.
-- Diagnostic detail is trimmed before display; full messages are not persisted
-  to disk.
+- Diagnostic detail is trimmed before display. Job error messages are not
+  persisted, but crash reports intentionally keep the cause detail, up to eight
+  evidence lines, and the paths of scanned logs.
 
 --------------------------------------------------------------------------------
 8. SUBSYSTEM SPECIFICATION
@@ -897,6 +963,144 @@ background-colored outline. Up to ten videos are extracted per description.
   formatting.
 - open_path and open_url delegate to Explorer or the default browser.
 
+8.14 Event journal (src/journal.rs)
+
+Purpose:
+- Preserve the timeline that library.json cannot provide: when the game started
+  and stopped, and how long each mod download took.
+- The crash analyzer reads it to attribute a crash to a recently installed mod.
+
+File: <root>/journal.jsonl, one JSON object per line, append-only.
+
+Fields:
+t        unix    Event time; for downloads, the first byte.
+event    string  "launch", "exit", or "download".
+game     string  Build id.
+name     string  Build display name or mod name.
+code     int     Exit code (exit events).
+seconds  int     Game session duration (exit events).
+crash    bool    Whether the launcher classified the exit as a crash.
+ms       int     Download duration in milliseconds.
+bytes    uint    Download size in bytes.
+mods     list    Enabled mod names at launch; omitted when empty.
+
+Rules:
+- Appends are serialized by a process-wide mutex and flushed immediately.
+- Reads ignore malformed lines, so a partial write cannot break diagnostics.
+- When the file exceeds 512 KiB and 4000 lines, the oldest lines are dropped and
+  the tail is rewritten atomically. Journal data is diagnostic only.
+
+8.15 Crash detection and analyzer (src/diagnose.rs)
+
+Trigger:
+- poll_game calls try_wait on the child each frame while the launcher is open.
+- An exit is a crash when any of the following is true:
+  - the exit code is non-zero and not 0xC000013A (normal console close);
+  - the code matches NTSTATUS (0xC0000000 mask), excluding 0xC000013A;
+  - crash_signal finds a strong marker in a recent signal file.
+- Unity often returns its own crash code (for example 47818 / 0xBACA) without a
+  Crash!!! line, so the first rule is required for real Yandere Simulator
+  crashes.
+- Signal files: <build>/Player.log, <build>/BepInEx/LogOutput.log,
+  LocalLow\YandereDev\YandereSimulator\Player.log and Player-prev.log, and the
+  newest JSON in Unity/<guid>/CrashReporter. Files older than 60 seconds before
+  the session start are ignored; up to 512 KiB is read.
+- Markers: "crash!!!", "crash has been intercepted", "the game crashed",
+  "fatal error", "has_native_crash": true.
+
+Log discovery:
+- Roots: the build folder, %USERPROFILE%\AppData\LocalLow\YandereDev, the local
+  AppData Temp\YandereDev, and %TEMP%\YandereDev.
+- Accepted names: any .log; names containing crash or error; names containing
+  log with .txt, .json, .ini, .out, or no extension. Binaries, images, archives,
+  and dumps are rejected.
+- Only files modified after started-60 seconds are scanned.
+- Traversal depth is limited to 9. The budget is 120000 directory entries and
+  at most 300 files are analyzed.
+- Order: Player.log, Player-prev.log, LogOutput.log, other .log, then
+  crash/error names.
+- Each file contributes its last 8 MiB (8 * 1024 * 1024). The first partial line
+  is dropped when the file was cut, a UTF-8 BOM is stripped, and invalid UTF-8 is
+  replaced.
+
+Rule scoring:
+- Each recognized line adds weight to one or more counters: out-of-memory, GPU,
+  runtime, incompatibility, missing DLL, conflict, disk, game bug, generic, mod
+  crash, Discord, and BepInEx plugin.
+- .NET exception names map to counters (OutOfMemoryException,
+  MissingMethodException, DllNotFoundException, ExecutionEngineException,
+  NullReferenceException, and others).
+- Native EXCEPTION_ACCESS_VIOLATION gains GPU weight only when the nearby stack
+  also names d3d11/d3d12/dxgi/nvoglv64/atio6axx/igdgmm/vulkan-1.
+- A missing DLL name is stored as the detail and outranks DirectX modules that
+  merely appear in a loaded-module list.
+- Discord rules: ResultException, Discord.Discord..ctor, DiscordRPC,
+  DllNotFoundException with "discord".
+- BepInEx plugin rule: a crash within 15 lines after "Loading [name]" marks that
+  plugin as incompatible and stores its name.
+- Mod attribution: installed mod DLL stems are matched inside the 60 lines below
+  an error site; the top three mod names are kept. Framework names (BepInEx,
+  Harmony, UnityEngine, mscorlib, and similar) are excluded.
+
+Cause priority (first match wins):
+1. no_logs (nothing scanned)
+2. disk
+3. out_of_memory
+4. mod_incompatible
+5. mod_missing_file
+6. mod_conflict
+7. discord
+8. missing_file
+9. incompatible
+10. gpu
+11. plugin_incompatible
+12. mod_crash
+13. runtime
+14. game_bug
+15. unknown
+
+Confidence:
+- Base values by cause: mod_incompatible 88, mod_crash 82, disk 80,
+  mod_missing_file 78, out_of_memory 76, mod_conflict 74, discord 74, gpu 72,
+  missing_file 66, plugin_incompatible 64, incompatible 62, runtime 58,
+  game_bug 55, unknown 22, no_logs 12.
+- Adjustments: +4 when a mod_* cause has a mod, +3 for any recent mod, +3 for
+  three or more evidence lines, +4 for a native flag, +3 for a managed flag,
+  +8 for an unknown cause with a crash marker, -20 for a mod_* cause without a
+  mod, -8 when the second-highest counter is within 20 percent of the first.
+- The result is clamped to 5..96 and rendered with an explicit "this is a rule
+  estimate, not a guarantee" note.
+
+Report:
+- id "<unix>-<build id>", at, started, duration_s, game_id, game_name,
+  exit_code, confidence, kind, detail, mods, recent, evidence, scanned, logs.
+- evidence holds at most 8 lines, each at most 220 characters, with file and
+  1-based line number; duplicate file/line pairs are skipped.
+- kind is a stable machine code (mod_crash, discord, gpu, and so on), so history
+  renders in the current interface language.
+- recent lists up to five enabled mods installed within one hour before the
+  launch, newest first, with download_ms taken from a journal download record
+  within 600 seconds of the install time.
+- Reports are written atomically to <root>/crashes/<id>.json; only the newest 50
+  files are kept. The report lists up to 30 scanned log paths and counts all
+  collected files (at most 300) in scanned.
+
+8.16 Crash history UI (src/ui/crashes.rs)
+
+- Header: count, "Open logs folder" action.
+- Filters: "All · N" and one chip per build that has reports; the filter is set
+  to the crashed build when a new report arrives.
+- Empty state explains that crashes will appear here.
+- While analysis runs, a card shows the animated loading indicator, stage text,
+  file progress, current file, elapsed time, and a cancel button.
+- Report card: cause title, timestamp, session duration, build, exit code in
+  hex, detail paragraph, confidence bar and disclaimer, numbered advice,
+  "Mods installed before launch" with local time and download duration, evidence
+  lines with file:line, a collapsible list of scanned logs, and actions: open
+  logs folder, open build, copy report.
+- Reports are sorted newest first; the newest report is selected and expanded
+  automatically.
+
 --------------------------------------------------------------------------------
 9. PERSISTENT DATA SPECIFICATION
 --------------------------------------------------------------------------------
@@ -918,6 +1122,8 @@ background-colored outline. Up to ten videos are extracted per description.
 │  ├─ builds.json                   Game catalog cache
 │  ├─ mods.json                     Mod catalog cache
 │  └─ covers/<hash>.img             Screenshot and thumbnail cache
+├─ crashes/<unix>-<build id>.json   Crash reports, newest 50 kept
+├─ journal.jsonl                    Launch, exit, and download journal
 └─ library.json                     Installed mod records
 
 Launcher configuration is stored separately:
@@ -958,7 +1164,11 @@ The file is written as pretty-printed JSON on every settings change.
       "files": [
         { "path": "BepInEx/plugins/ConfigurationManager.dll", "replaced": false }
       ],
-      "cfg": "BepInEx\\config\\com.bepis.bepinex.configurationmanager.cfg"
+      "cfg": "BepInEx\\config\\com.bepis.bepinex.configurationmanager.cfg",
+      "version": "19.1",
+      "bundled": false,
+      "enabled": true,
+      "pending": null
     }
   ]
 }
@@ -971,6 +1181,12 @@ Key rules:
 - path is always relative to the build root and uses forward slashes.
 - replaced=true means a backup exists and must be restored on removal.
 - cfg is optional for backward compatibility; empty means "use the catalog".
+- version is the installed variant version; bundled=true marks mods that are
+  already part of the Build, which have no switch and no delete action.
+- enabled=false means the mod files were moved to .yanlan/disabled/<key> and the
+  original files were restored into the build.
+- pending=true or pending=false marks an interrupted toggle direction; it is
+  completed at the next launcher start.
 
 9.4 .yanlan.json
 
@@ -1019,6 +1235,55 @@ Cover files:
 - Blank lines, comments, section headers, and untouched settings are written
   exactly as read.
 - The original newline style and final-newline presence are restored.
+
+9.7 journal.jsonl
+
+Append-only JSONL. One object per line:
+{"t":1794449078,"event":"launch","game":"Main","name":"Main","code":0,
+ "seconds":0,"crash":false,"ms":0,"bytes":0,"mods":["PoseMod"]}
+{"t":1794449083,"event":"exit","game":"Main","name":"Main","code":47818,
+ "seconds":5,"crash":true,"ms":0,"bytes":0}
+{"t":1794446117,"event":"download","game":"Main","name":"PoseMod","ms":2345,
+ "bytes":4096}
+
+Rules:
+- launch records the session start and the enabled mod names.
+- exit pairs with the preceding launch; code, seconds, and crash are final.
+- download records the mod name, duration, and size. The analyzer matches it to
+  installed_at within 600 seconds.
+- Missing fields deserialize to defaults, so older lines remain readable.
+
+9.8 Crash report
+
+{
+  "id": "1794446785-main",
+  "at": 1794446785,
+  "started": 1794446783,
+  "duration_s": 2,
+  "game_id": "Main",
+  "game_name": "Main",
+  "exit_code": 47818,
+  "confidence": 69,
+  "kind": "discord",
+  "detail": "discord_game_sdk",
+  "mods": ["PoseMod"],
+  "recent": [
+    { "name": "PoseMod", "at": 1794446117, "download_ms": 2345 }
+  ],
+  "evidence": [
+    { "file": "...\\Player.log", "line": 5, "text": "DllNotFoundException: ..." }
+  ],
+  "scanned": 7,
+  "logs": ["...\\Player.log", "...\\BepInEx\\LogOutput.log"]
+}
+
+Rules:
+- exit_code is the raw process code; a Windows crash code is also shown as hex
+  in detail when no better detail was found.
+- kind is the machine-readable cause; title, explanation, and advice are
+  generated at render time in the active language.
+- confidence is a heuristic 5..96 rating.
+- The file name follows <at>-<sanitized build id>; the newest 50 files are kept.
 
 --------------------------------------------------------------------------------
 10. OPERATING PROCEDURES
@@ -1146,6 +1411,30 @@ Caches:
 - Settings > Behaviour > Light theme switches the palette and native window
   chrome immediately; the choice is persisted.
 
+10.10 Launch the game and review a crash
+
+1. Select the build in the top bar and press Play.
+2. The launcher writes a launch entry to journal.jsonl, starts the executable
+   with the build folder as the working directory, and polls the process every
+   frame. Keep the launcher open for the analysis to work.
+3. A normal exit (code 0) closes the session record and does not start an
+   analysis.
+4. On an abnormal exit, the Crashes tab opens automatically. A loading card shows
+   the analysis stage, file progress, and elapsed time; Cancel stops it.
+5. When the job finishes, the newest report is selected: cause, confidence,
+   detail, advice, recent mods with install/download times, evidence lines, and
+   the list of scanned logs.
+6. Use the build chips to filter history, "Open logs folder" to inspect the raw
+   logs, "Open build" to check files, and "Copy report" to paste it into a bug
+   report.
+7. While the analysis runs, Play is blocked; wait for it to finish or cancel it.
+8. Reports survive restarts. If no logs were found, the report says so; check
+   the logs folder and whether the game writes logs elsewhere.
+
+Verification: a real abnormal exit must open the tab by itself and produce a
+report with at least one evidence line or an explicit no-logs result; a normal
+exit must not.
+
 --------------------------------------------------------------------------------
 11. BUILD AND RELEASE
 --------------------------------------------------------------------------------
@@ -1216,6 +1505,11 @@ Mandatory:
 [ ] The embedded player starts without error 153, or falls back to the browser.
 [ ] Cancelling a download leaves no misleading library record.
 [ ] The activity log and toasts report success and failure consistently.
+[ ] A launch writes a launch entry and an exit entry with duration and code.
+[ ] A normal exit (code 0) does not open the Crashes tab.
+[ ] An abnormal exit opens Crashes by itself and finishes with a report.
+[ ] Crash evidence quotes real log lines; a log-less crash reports no_logs.
+[ ] Crash history filters by build and survives a launcher restart.
 
 Data hygiene:
 [ ] Test data in the user's real root directory is restored or removed.
@@ -1309,12 +1603,17 @@ Covered areas:
 - Utilities: path traversal rejection, atomic file writes, human-readable
   sizes, Cyrillic directory names, BOM stripping, date conversion, quoted
   argument splitting.
+- Journal: append/read round-trip, malformed-line tolerance.
+- Crash analyzer: crash-code recognition, Unity abnormal exit codes, Discord
+  and BepInEx plugin rules, missing-DLL priority over GPU modules, plugin
+  proximity limits, BOM-free evidence, recent-mod attribution with download
+  duration, and report save/load.
 - Localization placeholder substitution.
 
 Execution:
   cargo test
 
-Current baseline: 46 passed, 1 ignored (2026-11-11, product version 2.2.5).
+Current baseline: 63 passed, 1 ignored (2026-11-12, product version 2.4.5).
 
 A nonzero exit code can occur in some consoles even when all tests pass because
 the test harness writes to stderr. The authoritative result is the "test result"
@@ -1348,6 +1647,14 @@ Cases:
 18. Open a YouTube video from a description.
 19. Resize the window while the player is open.
 20. Delete a build and confirm its directory and mod records are removed.
+21. Play a build, close it normally, and confirm no crash report appears.
+22. Trigger a crash with a non-zero Unity exit code and no Crash!!! marker;
+    confirm the Crashes tab opens and a report is created.
+23. Remove discord_game_sdk.dll from a build with Discord RPC and confirm the
+    report names the Discord SDK with evidence.
+24. Crash once, then confirm the history chip for that build matches the report.
+25. Start a large analysis and confirm Play is blocked until it ends.
+26. Restart the launcher and confirm crash history and filters are restored.
 
 Result recording:
 - Record the build version, operating system, and root path.
@@ -1384,6 +1691,9 @@ Residual risks and required care:
   hardening change should apply util::safe_relative to this path.
 - The launcher does not verify checksums or signatures of downloaded builds or
   mods; integrity depends on the transport and the host.
+- Crash reports contain absolute log paths and short log excerpts, which may
+  include the Windows user name or mod names. They stay local and are uploaded
+  only if the user copies them into a bug report.
 - Deleting a build removes its backup sets permanently.
 - Cancelling a mod installation can leave already-copied files in the build.
   Because the library record is written only after all files succeed, the
@@ -1409,6 +1719,18 @@ Functional limitations:
   which can be slow for very large builds.
 - There is no per-file progress display during mod uninstall.
 - Building requires Rust 1.93+ because of sevenz-rust2.
+- Crash analysis works only while the launcher stays open and waits for the
+  child process. Closing the launcher during play leaves an unpaired launch
+  entry and no automatic report.
+- Any non-zero exit code except 0xC000013A is treated as a crash, so a manual
+  process kill or an invalid launch argument can also open the Crashes tab.
+- Cause and confidence are rule-based heuristics, not a guarantee; ambiguous
+  logs can rank the wrong cause first. The evidence lines are authoritative.
+- Only the last 8 MiB of each log is read, at most 300 files are analyzed, and
+  files older than the session window are ignored. Rotated logs may be missed.
+- Crash reports are capped at 50 and the journal at 4000 lines, so older
+  diagnostic history is discarded.
+- The analyzer gives advice only; it does not disable mods or repair the game.
 
 Robustness limitations:
 - Release builds use panic=abort, disabling background panic recovery.
@@ -1498,6 +1820,27 @@ Cause: Server stopped sending data; infinite retry is waiting; network dropped.
 Action: Check the status detail line; cancel and retry; enable or disable
         infinite retry as appropriate; test the proxy.
 
+Symptom: The game crashed but the Crashes tab did not open.
+Cause: The launcher was closed before the child process ended, or the game
+        reported exit code 0 (ordinary exit).
+Action: Keep the launcher open while playing. Check journal.jsonl: the exit
+        entry must have a non-zero code and "crash": true.
+
+Symptom: The crash report says no logs were found.
+Cause: No matching files in the build, LocalLow, or TEMP\YandereDev, or all
+        logs are older than the session window.
+Action: Press "Open logs folder"; run the game once so Unity writes Player.log;
+        check that the game is allowed to write LocalLow.
+
+Symptom: The report blames Discord or the GPU right after a mod install.
+Cause: Rule-based confidence is a heuristic; several causes can be close.
+Action: Read the evidence lines and the recent-mod list. Test without the newest
+        mod before changing drivers or reinstalling the game.
+
+Symptom: Play reports "Wait until the log analysis finishes".
+Cause: A crash analysis is still running.
+Action: Wait for the progress card to finish, or press Cancel in that card.
+
 Symptom: The window title bar is the wrong color.
 Cause: Windows version does not support the DWM attributes used, or a remote
         desktop session overrides them.
@@ -1560,7 +1903,7 @@ a third language requires a structural change to a key-based dictionary.
 6. Attach YanLan.exe, README.md, CHANGELOG.md, and LICENSE to the release.
 7. Verify the executable's embedded version and icon.
 
-Current versions: Cargo.toml 2.2.5, README 2.2.5, CHANGELOG 2.2.5.
+Current versions: Cargo.toml 2.4.5, README 2.4.5, CHANGELOG 2.4.5.
 
 17.6 Cache schema changes
 
@@ -1569,6 +1912,20 @@ Current versions: Cargo.toml 2.2.5, README 2.2.5, CHANGELOG 2.2.5.
 3. Verify that a fresh fetch succeeds and that categories and cfg fields are
    correct.
 4. Record the change in the changelog.
+
+17.7 Change crash detection or analyzer rules
+
+1. Exit-code policy lives in diagnose.rs: marker, crash_signal,
+   is_crash_code, and is_abnormal_code. Keep 0xC000013A excluded as a normal
+   console close.
+2. Counter weights and thresholds are in scan and build. Cause selection is the
+   if-chain in build; confidence base values and adjustments follow it.
+3. A new cause needs a stable kind code, title/cause/advice arms in all
+   languages, a color or icon in the Crashes UI if applicable, and a test.
+4. Keep mod token exclusions for frameworks (BepInEx, Harmony, UnityEngine,
+   mscorlib, and similar) so a framework DLL is never blamed on a mod.
+5. Update README.md, CHANGELOG.md, and sections 8.15 and 9.8 of this document.
+6. Run cargo fmt, cargo test, and a manual crash check from section 13.2.
 
 --------------------------------------------------------------------------------
 18. APPENDIX A - EXTERNAL ENDPOINTS
@@ -1642,6 +1999,11 @@ Path                                  Created by      Removed by
 <root>/cache/mods.json                Catalog fetch   Clear cache
 <root>/cache/covers/                  Cover fetch     Clear cache
 <root>/library.json                   Mod install     Manual only
+<root>/journal.jsonl                  Launcher events Manual only; prunes
+                                                      itself at 512 KiB/4000
+                                                      lines
+<root>/crashes/                       Crash analysis  Manual only
+<root>/crashes/<id>.json              Crash analysis  Pruned to newest 50
 %APPDATA%/YanLan/config.json          Config save     Manual only
 
 Ownership rules:
@@ -1649,12 +2011,28 @@ Ownership rules:
 - .yanlan.json is the authoritative metadata for a build.
 - Cache files are disposable and must never be required for correctness.
 - Backup sets are required for rollback and must not be deleted independently.
+- journal.jsonl and crashes/ are diagnostic history. Deleting them only loses
+  crash context; it never affects installed builds or mods.
 
 --------------------------------------------------------------------------------
 21. VERIFICATION RECORD
 --------------------------------------------------------------------------------
 
 Date        Scope                                   Result
+2026-11-12  Crash analyzer and 2.4.5 detection fix: Passed. Real crash logs
+            journal, log discovery, rules, crash     (Discord SDK, BepInEx
+            history, abnormal-exit detection, BOM    plugin) classified;
+            stripping.                               simulated Unity code
+                                                     47818 opened Crashes
+                                                     automatically at 69%;
+                                                     cargo test 63 passed,
+                                                     1 ignored; release
+                                                     build succeeds.
+2026-11-12  Mod enable/disable, install timing,     Passed. Toggle moves
+            install time with seconds.               files without copying;
+                                                     timestamps and download
+                                                     durations matched the
+                                                     journal.
 2026-11-11  Data-safety and reliability fixes:      Passed. cargo test 46
             atomic JSON writes, library lock,        passed, 1 ignored; release
             corrupt-library quarantine, install      build succeeds; cargo
@@ -1691,6 +2069,15 @@ release checklist in section 11.4.
 --------------------------------------------------------------------------------
 
 Revision  Date        Author              Change
+2.2       2026-11-14  Archangel192028     Updated for product version 2.4.5:
+                                            crash journal and analyzer,
+                                            Crashes tab, log discovery,
+                                            abnormal Unity exit codes, report
+                                            formats, 63-test baseline.
+2.1       2026-11-12  Archangel192028     Updated for product version 2.3.0:
+                                            mod enable/disable without
+                                            deletion, install and download
+                                            timestamps.
 2.0       2026-11-10  Archangel192028     Updated for product version 2.2.1:
                                             7z via sevenz-rust2, multi-volume
                                             archives, ioa, installed state,
